@@ -21,6 +21,11 @@ No ports to open, no IP address to share. Built for Android handhelds.
 
 <br>
 
+> [!NOTE]
+> **Desktop Version** adapted and worked by **[@Noobiez16](https://github.com/Noobiez16)**. Windows, Linux, and macOS client available in the [`app-desktop/`](./app-desktop) folder.
+
+<br>
+
 > [!IMPORTANT]
 > **DS local wireless needs WatermelonDS Emufii Edition.**
 > Starting with Emufii 2.0, DS local wireless games can be played online. This only works with [WatermelonDS Emufii Edition](https://github.com/jojodogm-ctrl/WatermelonDS/releases/latest), a fork of WatermelonDS that adds the netplay this needs.
@@ -211,7 +216,8 @@ and come say hi on [Discord](https://discord.gg/tvWcb28vBZ)!
 
 **Contributors**<br>
 [@sofianeelhor](https://github.com/sofianeelhor) for the PPSSPP and ARMSX2 network automation<br>
-[@BrianJr03](https://github.com/BrianJr03) for the manual session setup and uncropped covers
+[@BrianJr03](https://github.com/BrianJr03) for the manual session setup and uncropped covers<br>
+[@Noobiez16](https://github.com/Noobiez16) for the desktop version adaptation
 
 <br>
 
