@@ -1,5 +1,7 @@
 # Emufii Desktop
 
+**Desktop Version adapted and worked by [Noobiez16](https://github.com/Noobiez16)**
+
 **Play your emulators online with friends, using a six-character code.**<br>
 Desktop edition of Emufii supporting **Windows**, **Linux (amd64 + arm64)**, and **macOS (x64 + arm64)**.
 
@@ -92,6 +94,14 @@ npm start
   npm run dist:all
   ```
 Binaries are output to `app-desktop/release/`.
+
+---
+
+## Credits & Acknowledgements
+
+- **Original Project**: Emufii Android edition by [jojodogm-ctrl](https://github.com/jojodogm-ctrl/emufii) and contributors (@sofianeelhor, @BrianJr03).
+- **Desktop Version**: Adapted and worked by **[Noobiez16](https://github.com/Noobiez16)**.
+- **Emulators & Projects**: Supported thanks to [Eden](https://eden-emu.dev), [Azahar](https://azahar-emu.org), [Dolphin](https://dolphin-emu.org), [PPSSPP](https://www.ppsspp.org), [PCSX2](https://pcsx2.net), [melonDS](https://melonds.kuribo64.net), [WatermelonDS](https://github.com/SapphireRhodonite/WatermelonDS), and [Kaeru WFC](https://kaeru.world).
 
 ---
 
