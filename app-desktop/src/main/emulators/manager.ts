@@ -3,7 +3,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { EmulatorDownloader } from './downloader.js';
-import { SwitchKeyManager } from './switchKeys.js';
 
 export interface EmulatorInfo {
   name: string;
@@ -69,10 +68,10 @@ export class EmulatorManager {
     }
 
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('PSP');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('PSP');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/ppsspp',
@@ -84,6 +83,7 @@ export class EmulatorManager {
       const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
       const localApp = process.env.LOCALAPPDATA || 'C:\\Users\\User\\AppData\\Local';
       candidates = [
+        ...(managed ? [managed] : []),
         path.join(progFiles, 'PPSSPP', 'PPSSPPWindows64.exe'),
         path.join(localApp, 'PPSSPP', 'PPSSPPWindows64.exe'),
       ];
@@ -161,10 +161,10 @@ export class EmulatorManager {
     }
 
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('PS2');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('PS2');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/pcsx2-qt',
@@ -176,6 +176,7 @@ export class EmulatorManager {
       const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
       const localApp = process.env.LOCALAPPDATA || 'C:\\Users\\User\\AppData\\Local';
       candidates = [
+        ...(managed ? [managed] : []),
         path.join(progFiles, 'PCSX2', 'pcsx2-qt.exe'),
         path.join(localApp, 'Programs', 'PCSX2', 'pcsx2-qt.exe'),
       ];
@@ -267,10 +268,10 @@ export class EmulatorManager {
       return { name: 'Dolphin', console: 'GameCube / Wii', executablePath: customPath, isInstalled: true };
     }
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('GameCube');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('GameCube');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/dolphin-emu',
@@ -279,7 +280,13 @@ export class EmulatorManager {
       ];
     } else if (platform === 'win32') {
       const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
-      candidates = [path.join(progFiles, 'Dolphin', 'Dolphin.exe')];
+      const localApp = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      candidates = [
+        ...(managed ? [managed] : []),
+        path.join(progFiles, 'Dolphin-x64', 'Dolphin.exe'),
+        path.join(progFiles, 'Dolphin', 'Dolphin.exe'),
+        path.join(localApp, 'Dolphin', 'Dolphin.exe'),
+      ];
     } else if (platform === 'darwin') {
       candidates = ['/Applications/Dolphin.app/Contents/MacOS/Dolphin'];
     }
@@ -300,10 +307,10 @@ export class EmulatorManager {
       return { name: 'melonDS', console: 'DS', executablePath: customPath, isInstalled: true };
     }
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('DS');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('DS');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/melonds',
@@ -312,7 +319,12 @@ export class EmulatorManager {
       ];
     } else if (platform === 'win32') {
       const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
-      candidates = [path.join(progFiles, 'melonDS', 'melonDS.exe')];
+      const localApp = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      candidates = [
+        ...(managed ? [managed] : []),
+        path.join(progFiles, 'melonDS', 'melonDS.exe'),
+        path.join(localApp, 'melonDS', 'melonDS.exe'),
+      ];
     } else if (platform === 'darwin') {
       candidates = ['/Applications/melonDS.app/Contents/MacOS/melonDS'];
     }
@@ -333,10 +345,10 @@ export class EmulatorManager {
       return { name: 'Azahar / Citra', console: '3DS', executablePath: customPath, isInstalled: true };
     }
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('3DS');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('3DS');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/azahar',
@@ -346,7 +358,12 @@ export class EmulatorManager {
       ];
     } else if (platform === 'win32') {
       const local = process.env.LOCALAPPDATA || 'C:\\Users\\User\\AppData\\Local';
+      const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
       candidates = [
+        ...(managed ? [managed] : []),
+        path.join(local, 'Azahar', 'azahar.exe'),
+        path.join(local, 'Azahar', 'azahar-qt.exe'),
+        path.join(progFiles, 'Azahar', 'azahar.exe'),
         path.join(local, 'Citra', 'citra-qt.exe'),
         path.join(local, 'Lime3DS', 'lime3ds-qt.exe'),
       ];
@@ -760,10 +777,10 @@ export class EmulatorManager {
       return { name: 'mGBA', console: 'GBA', executablePath: customPath, isInstalled: true };
     }
     const platform = os.platform();
+    const managed = EmulatorDownloader.getManagedPath('GBA');
     let candidates: string[] = [];
 
     if (platform === 'linux') {
-      const managed = EmulatorDownloader.getManagedPath('GBA');
       candidates = [
         ...(managed ? [managed] : []),
         '/usr/bin/mgba-qt',
@@ -774,9 +791,12 @@ export class EmulatorManager {
       ];
     } else if (platform === 'win32') {
       const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
+      const localApp = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
       candidates = [
+        ...(managed ? [managed] : []),
         path.join(progFiles, 'mGBA', 'mGBA.exe'),
         path.join(progFiles, 'mGBA', 'mgba.exe'),
+        path.join(localApp, 'mGBA', 'mGBA.exe'),
       ];
     } else if (platform === 'darwin') {
       candidates = ['/Applications/mGBA.app/Contents/MacOS/mGBA'];
@@ -866,11 +886,6 @@ export class EmulatorManager {
 
     try {
       const gamepad = this.getConnectedGamepad();
-
-      if (consoleType === 'Switch') {
-        await SwitchKeyManager.autoProvisionKeys(path.dirname(options.romPath));
-        SwitchKeyManager.verifyAndRepairXci(options.romPath);
-      }
 
       // Build console-specific arguments including automatic fullscreen
       const args: string[] = [];

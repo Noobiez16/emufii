@@ -1,12 +1,20 @@
 import { store } from '../state.js';
 import { sfx } from '../sfx.js';
-import { formatFriendCode, isValidFriendCode } from '../../../main/profile/friendCode.js';
+import { formatFriendCode, attachFriendCodeInputFormatter } from '../../../main/profile/friendCode.js';
+import {
+  resolveFriendDisplayName,
+  resolveFriendAvatar,
+  resolveFriendActivity,
+  confirmRemoveFriendModal,
+  promptRenameFriendModal,
+  addFriendWithSync,
+  syncFriendsRealtime,
+} from '../components/FriendActionModal.js';
 
 export function renderFriendsScreen(container: HTMLElement) {
   const state = store.get();
   const emuApi = (window as any).emufii;
   let selectedIndex = 0;
-  let friendStatuses: any = { present: {}, names: {}, lastGames: {} };
 
   container.innerHTML = `
     <div style="flex: 1; display: flex; flex-direction: column; padding: 32px; gap: 24px; overflow-y: auto;">
@@ -46,7 +54,7 @@ export function renderFriendsScreen(container: HTMLElement) {
       <div class="plate dialog-content" style="width: 440px; padding: 28px; display: flex; flex-direction: column; gap: 16px;">
         <h2 style="font-size: 20px; font-weight: 800;">Add a Friend</h2>
         <p style="font-size: 13px; color: var(--ink-secondary);">Enter their 12-character Crockford friend code</p>
-        <input type="text" id="inputFriendCode" class="plate" placeholder="XXXX-XXXX-XXXX" style="padding: 12px 16px; font-family: var(--font-family); font-size: 16px; font-weight: 700; color: var(--accent-bright); text-align: center; text-transform: uppercase;">
+        <input type="text" id="inputFriendCode" class="plate" placeholder="Type code XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="padding: 12px 16px; font-family: var(--font-family); font-size: 16px; font-weight: 700; color: var(--accent-bright); text-align: center; text-transform: uppercase;">
         <div id="friendCodeError" style="font-size: 12px; color: var(--compat-broken); display: none;">Invalid friend code format or checksum.</div>
         <div style="display: flex; gap: 12px; margin-top: 8px;">
           <button class="btn-secondary plate-button" id="btnCancelAddFriend" style="flex: 1;">Cancel</button>
@@ -57,11 +65,7 @@ export function renderFriendsScreen(container: HTMLElement) {
   `;
 
   const fetchStatuses = async () => {
-    try {
-      if (state.settings.friends.length > 0) {
-        friendStatuses = await emuApi.coordinator.friendStatuses(state.settings.friends);
-      }
-    } catch {}
+    await syncFriendsRealtime();
     renderFriendsList();
   };
 
@@ -69,7 +73,8 @@ export function renderFriendsScreen(container: HTMLElement) {
     const listEl = container.querySelector('#friendsContent');
     if (!listEl) return;
 
-    const friends = state.settings.friends;
+    const currentState = store.get();
+    const friends = currentState.settings.friends;
     if (friends.length === 0) {
       listEl.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 260px; gap: 12px; text-align: center;">
@@ -82,46 +87,49 @@ export function renderFriendsScreen(container: HTMLElement) {
     }
 
     const currentFriend = friends[selectedIndex] || friends[0];
-    const presence = friendStatuses.present[currentFriend];
-    const customNick = state.settings.friendNicknames[currentFriend];
-    const name = customNick || friendStatuses.names[currentFriend] || 'Friend';
-    const lastGame = friendStatuses.lastGames[currentFriend];
-    const isOnline = !!presence;
+    const name = resolveFriendDisplayName(currentFriend);
+    const avatar = resolveFriendAvatar(currentFriend);
+    const activity = resolveFriendActivity(currentFriend);
 
     listEl.innerHTML = `
       <!-- Friend Showcase Card (3DS-style) -->
       <div class="plate" style="display: flex; gap: 24px; padding: 28px; align-items: center;">
-        <div style="width: 100px; height: 100px; border-radius: var(--radius-xl); background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 900; color: var(--accent-bright); border: 2px solid var(--plate-border);">
-          ${name.slice(0, 2).toUpperCase()}
+        <div style="width: 100px; height: 100px; border-radius: var(--radius-xl); background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 900; color: var(--accent-bright); border: 2px solid var(--plate-border); overflow: hidden; flex-shrink: 0;">
+          ${
+            avatar
+              ? `<img src="${avatar}" alt="${name}" style="width: 100%; height: 100%; object-fit: cover;">`
+              : name.slice(0, 2).toUpperCase()
+          }
         </div>
 
         <div style="flex: 1;">
           <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
             <span style="font-size: 22px; font-weight: 800;">${name}</span>
-            <span class="lamp ${isOnline ? 'active' : ''}"></span>
-            <span style="font-size: 12px; color: var(--ink-secondary); font-weight: 700;">${isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+            <span class="lamp ${activity.isOnline ? 'active' : ''}"></span>
+            <span style="font-size: 12px; color: var(--ink-secondary); font-weight: 700;">${activity.isOnline ? 'ONLINE' : 'OFFLINE'}</span>
           </div>
           <div style="font-family: var(--font-family); font-size: 14px; color: var(--ink-secondary); margin-bottom: 12px;">
             ${formatFriendCode(currentFriend)}
           </div>
 
           ${
-            presence?.sessionCode
+            activity.sessionCode
               ? `
             <div style="display: flex; align-items: center; gap: 12px;">
-              <span class="fact-tag" style="background: var(--accent-subtle); color: var(--accent-bright);">Playing ${presence.romTitle || 'Session'}</span>
-              <button class="btn-primary plate-button" id="btnJoinFriendSession" data-code="${presence.sessionCode}" style="height: 32px; padding: 0 16px; font-size: 12px; width: auto;">
+              <span class="fact-tag" style="background: var(--accent-subtle); color: var(--accent-bright);">${activity.statusText}</span>
+              <button class="btn-primary plate-button" id="btnJoinFriendSession" data-code="${activity.sessionCode}" style="height: 32px; padding: 0 16px; font-size: 12px; width: auto;">
                 Join Room
               </button>
             </div>
           `
-              : lastGame
-              ? `<div style="font-size: 13px; color: var(--ink-secondary);">Last played: <strong>${lastGame.title}</strong></div>`
-              : `<div style="font-size: 13px; color: var(--ink-tertiary);">No recent activity</div>`
+              : `<div style="font-size: 13px; font-weight: ${activity.isPlaying ? '700' : '500'}; color: ${activity.isPlaying ? 'var(--accent-bright)' : 'var(--ink-secondary)'};">${activity.statusText}</div>`
           }
         </div>
 
-        <div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-secondary plate-button" id="btnRenameFriendScreen" style="height: 36px; padding: 0 14px; font-size: 12px;">
+            Rename
+          </button>
           <button class="icon-btn plate-button" id="btnRemoveFriend" title="Remove Friend" style="color: var(--compat-broken);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
@@ -131,18 +139,24 @@ export function renderFriendsScreen(container: HTMLElement) {
       <!-- Friends Selector Row -->
       <div style="display: flex; gap: 16px; overflow-x: auto; padding: 8px 0;">
         ${friends
-          .map(
-            (f, idx) => `
+          .map((f, idx) => {
+            const fName = resolveFriendDisplayName(f);
+            const fAvatar = resolveFriendAvatar(f);
+            return `
           <div class="plate plate-button ${idx === selectedIndex ? 'focused' : ''}" style="width: 140px; padding: 14px; text-align: center; cursor: pointer; flex-shrink: 0;" data-index="${idx}">
-            <div style="width: 48px; height: 48px; border-radius: var(--radius-lg); background: var(--bg-shelf); margin: 0 auto 8px auto; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; color: var(--accent-bright);">
-              ${(state.settings.friendNicknames[f] || friendStatuses.names[f] || 'F').slice(0, 2).toUpperCase()}
+            <div style="width: 48px; height: 48px; border-radius: var(--radius-lg); background: var(--bg-shelf); margin: 0 auto 8px auto; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; color: var(--accent-bright); overflow: hidden;">
+              ${
+                fAvatar
+                  ? `<img src="${fAvatar}" alt="${fName}" style="width: 100%; height: 100%; object-fit: cover;">`
+                  : fName.slice(0, 2).toUpperCase()
+              }
             </div>
             <div style="font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-              ${state.settings.friendNicknames[f] || friendStatuses.names[f] || 'Friend'}
+              ${fName}
             </div>
           </div>
-        `
-          )
+        `;
+          })
           .join('')}
       </div>
     `;
@@ -156,16 +170,23 @@ export function renderFriendsScreen(container: HTMLElement) {
       });
     });
 
+    // Rename friend
+    listEl.querySelector('#btnRenameFriendScreen')?.addEventListener('click', () => {
+      promptRenameFriendModal({
+        code: currentFriend,
+        onRenamed: () => renderFriendsList(),
+      });
+    });
+
     // Remove friend
-    listEl.querySelector('#btnRemoveFriend')?.addEventListener('click', async () => {
-      sfx.play('click');
-      if (confirm(`Remove this friend?`)) {
-        await emuApi.config.removeFriend(currentFriend);
-        const updatedFriends = state.settings.friends.filter((f) => f !== currentFriend);
-        store.set({ settings: { ...state.settings, friends: updatedFriends } });
-        selectedIndex = 0;
-        fetchStatuses();
-      }
+    listEl.querySelector('#btnRemoveFriend')?.addEventListener('click', () => {
+      confirmRemoveFriendModal({
+        code: currentFriend,
+        onRemoved: () => {
+          selectedIndex = 0;
+          renderFriendsList();
+        },
+      });
     });
 
     // Join friend's room
@@ -229,8 +250,16 @@ export function renderFriendsScreen(container: HTMLElement) {
 
   // Add friend dialog
   const dialog = container.querySelector('#addFriendDialog') as HTMLDialogElement;
+  const codeInputEl = dialog.querySelector('#inputFriendCode') as HTMLInputElement | null;
+  if (codeInputEl) {
+    attachFriendCodeInputFormatter(codeInputEl);
+  }
+
   container.querySelector('#btnAddFriendModal')?.addEventListener('click', () => {
     sfx.play('click');
+    if (codeInputEl) codeInputEl.value = '';
+    const errEl = dialog.querySelector('#friendCodeError') as HTMLElement | null;
+    if (errEl) errEl.style.display = 'none';
     dialog.showModal();
   });
 
@@ -242,7 +271,9 @@ export function renderFriendsScreen(container: HTMLElement) {
   dialog.querySelector('#btnConfirmAddFriend')?.addEventListener('click', async () => {
     const input = (dialog.querySelector('#inputFriendCode') as HTMLInputElement).value;
     const errEl = dialog.querySelector('#friendCodeError') as HTMLElement;
-    if (!isValidFriendCode(input)) {
+    const res = await addFriendWithSync(input);
+    if (!res.ok) {
+      errEl.textContent = res.error || 'Invalid friend code format or checksum.';
       errEl.style.display = 'block';
       sfx.play('notify');
       return;
@@ -250,11 +281,8 @@ export function renderFriendsScreen(container: HTMLElement) {
 
     errEl.style.display = 'none';
     sfx.play('confirm');
-    await emuApi.config.addFriend(input.replace(/[-_ ]/g, '').toUpperCase());
-    const cfg = await emuApi.config.get();
-    store.set({ settings: cfg.settings });
     dialog.close();
-    fetchStatuses();
+    renderFriendsList();
   });
 
   fetchStatuses();

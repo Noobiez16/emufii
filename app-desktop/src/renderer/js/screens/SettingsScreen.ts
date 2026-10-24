@@ -3,6 +3,7 @@ import { sfx } from '../sfx.js';
 import { t, getActiveLanguage } from '../i18n.js';
 import { resolveTheme } from '../components/SettingsModal.js';
 import { ensureEmulator } from '../components/EmulatorDownloadModal.js';
+import { openUpdateModal } from '../components/UpdateModal.js';
 
 export type SettingsHubView = 'hub' | 'general' | 'library' | 'consoles' | 'emulators' | 'appearance' | 'about' | 'crashlogs';
 
@@ -375,7 +376,7 @@ function renderDetailBody(view: SettingsHubView, state: any, accents: any[]): st
     case 'appearance':
       return renderAppearancePage(state, accents);
     case 'about':
-      return renderAboutPage();
+      return renderAboutPage(state);
     case 'crashlogs':
       return renderCrashLogsPage();
     default:
@@ -762,7 +763,8 @@ function renderAppearancePage(state: any, accents: any[]): string {
 }
 
 // 6. About page
-function renderAboutPage(): string {
+function renderAboutPage(state: any): string {
+  const autoDownload = state.settings?.autoDownloadUpdates !== false;
   return `
     <div class="settings-section-header">${t('about')}</div>
     <div class="settings-clean-group" style="padding: 24px; display: flex; flex-direction: column; gap: 12px;">
@@ -775,6 +777,35 @@ function renderAboutPage(): string {
       </div>
       <div style="color: var(--ink-tertiary); font-size: 12px; margin-top: 4px;">
         ${t('about_license')}
+      </div>
+    </div>
+
+    <div class="settings-section-header">${t('updates_section')}</div>
+    <div class="settings-clean-group">
+      <div class="settings-clean-row">
+        <div>
+          <div class="settings-label">${t('auto_download_updates')}</div>
+          <div class="settings-sublabel">${t('auto_download_updates_sub')}</div>
+        </div>
+        <label class="clean-switch">
+          <input type="checkbox" id="chkAutoDownloadUpdates" ${autoDownload ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="settings-clean-row">
+        <div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="settings-label">${t('check_updates_title')}</span>
+            <span class="badge" id="updateStatusBadge" style="font-size: 10px; font-weight: 800; background: rgba(16, 185, 129, 0.15); color: #10b981; padding: 2px 8px; border-radius: 9999px;">
+              ${t('up_to_date_badge')}
+            </span>
+          </div>
+          <div class="settings-sublabel" id="updateStatusSublabel">${t('check_updates_sub')}</div>
+        </div>
+        <button class="btn-primary plate-button settings-fixed-btn" id="btnCheckForUpdates">
+          ${t('check_updates_btn')}
+        </button>
       </div>
     </div>
 
@@ -1140,7 +1171,8 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
         emuListEl.innerHTML = emus
           .map((emu) => {
             const isInstalled = emu.isInstalled;
-            const isManaged = emu.executablePath?.includes('.local/share/emufii/emulators');
+            const pathLower = (emu.executablePath || '').toLowerCase();
+            const isManaged = pathLower.includes('emufii/emulators') || pathLower.includes('emufii\\emulators');
             return `
               <div class="emulator-clean-row">
                 <div class="emulator-clean-info">
@@ -1150,11 +1182,11 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
                     <span class="badge" style="font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 9999px; background: ${
                       isInstalled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'
                     }; color: ${isInstalled ? '#10b981' : '#ef4444'};">
-                      ${isManaged ? 'MANAGED APPIMAGE' : isInstalled ? t('ready') : t('missing')}
+                      ${isManaged ? 'AUTO-CONFIGURED' : isInstalled ? t('ready') : t('missing')}
                     </span>
                   </div>
                   <div class="emulator-clean-path">
-                    ${emu.executablePath || 'No executable detected in standard paths'}
+                    ${emu.executablePath || 'Auto-Download Ready (Windows & Linux)'}
                   </div>
                 </div>
                 <div class="emulator-clean-actions">
@@ -1279,6 +1311,72 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
       store.set({ settings: { ...state.settings, animations: checked } });
     });
   } else if (view === 'about') {
+    container.querySelector('#chkAutoDownloadUpdates')?.addEventListener('change', async (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      await emuApi.config.updateSettings({ autoDownloadUpdates: checked });
+      store.set({ settings: { ...store.get().settings, autoDownloadUpdates: checked } });
+      sfx.play('toggle');
+    });
+
+    const runUpdateCheck = async (openModalAlways: boolean) => {
+      const badge = container.querySelector('#updateStatusBadge') as HTMLElement | null;
+      const sublabel = container.querySelector('#updateStatusSublabel') as HTMLElement | null;
+      const btn = container.querySelector('#btnCheckForUpdates') as HTMLButtonElement | null;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = t('checking');
+      }
+      if (badge) {
+        badge.textContent = t('checking');
+        badge.style.background = 'rgba(59, 130, 246, 0.15)';
+        badge.style.color = '#3b82f6';
+      }
+      try {
+        const res = await emuApi.updates.check();
+        if (res?.updateAvailable) {
+          if (badge) {
+            badge.textContent = `${t('update_available_badge')} (v${res.latestVersion})`;
+            badge.style.background = 'rgba(245, 158, 11, 0.18)';
+            badge.style.color = '#f59e0b';
+          }
+          if (sublabel) {
+            sublabel.textContent = `Version ${res.latestVersion} is ready to install (current: v${res.currentVersion})`;
+          }
+          if (openModalAlways) {
+            openUpdateModal(res);
+          }
+        } else {
+          if (badge) {
+            badge.textContent = `${t('up_to_date_badge')} (v${res?.currentVersion || '2.0.3'})`;
+            badge.style.background = 'rgba(16, 185, 129, 0.15)';
+            badge.style.color = '#10b981';
+          }
+          if (sublabel) {
+            sublabel.textContent = `You are running the latest version (v${res?.currentVersion || '2.0.3'}).`;
+          }
+          if (openModalAlways && res) {
+            openUpdateModal(res);
+          }
+        }
+      } catch {
+        if (badge) {
+          badge.textContent = t('up_to_date_badge');
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = t('check_updates_btn');
+        }
+      }
+    };
+
+    runUpdateCheck(false);
+
+    container.querySelector('#btnCheckForUpdates')?.addEventListener('click', () => {
+      sfx.play('click');
+      runUpdateCheck(true);
+    });
+
     container.querySelector('#btnOpenDiscord')?.addEventListener('click', () => {
       sfx.play('click');
       const url = 'https://discord.gg/tvWcb28vBZ';

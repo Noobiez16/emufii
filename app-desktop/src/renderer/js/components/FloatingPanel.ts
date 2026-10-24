@@ -1,7 +1,22 @@
 import { store } from '../state.js';
 import { sfx } from '../sfx.js';
-import { formatFriendCode, isValidFriendCode } from '../../../main/profile/friendCode.js';
+import {
+  formatFriendCode,
+  attachFriendCodeInputFormatter,
+} from '../../../main/profile/friendCode.js';
 import type { OpenSession } from '../../../main/network/coordinator.js';
+import {
+  resolveFriendDisplayName,
+  resolveFriendAvatar,
+  resolveFriendActivity,
+  confirmRemoveFriendModal,
+  promptRenameFriendModal,
+  addFriendWithSync,
+  syncFriendsRealtime,
+  acceptFriendRequest,
+  declineFriendRequest,
+  encodeAvatarToWebpBase64,
+} from './FriendActionModal.js';
 
 export type FloatingTab = 'sessions' | 'join' | 'friends' | 'profile' | 'server';
 
@@ -121,6 +136,13 @@ export function openFloatingPanel(tab: FloatingTab = 'sessions') {
   // If opening sessions and not yet loaded, load now
   if (tab === 'sessions' && !sessionsLoaded && !loadingSessions) {
     refreshSessions();
+  }
+  if (tab === 'friends') {
+    syncFriendsRealtime(() => {
+      if (isOpen && currentTab === 'friends') {
+        renderFloatingPanel();
+      }
+    });
   }
 
   // Show panel with smooth arrive animation
@@ -268,9 +290,15 @@ function getTabHeaderInfo(tab: FloatingTab, profile: any) {
   }
 }
 
-function renderFloatingPanel() {
+export function renderFloatingPanel() {
   const panel = document.getElementById('floatingCloudPanel');
   if (!panel) return;
+
+  const activeEl = document.activeElement as HTMLInputElement | null;
+  const activeId = activeEl && panel.contains(activeEl) ? activeEl.id : null;
+  const existingCodeVal = (panel.querySelector('#inputFloatingFriendCode') as HTMLInputElement | null)?.value || '';
+  const selStart = activeEl?.selectionStart ?? null;
+  const selEnd = activeEl?.selectionEnd ?? null;
 
   const profile = store.get().profile;
   const headerInfo = getTabHeaderInfo(currentTab, profile);
@@ -321,6 +349,22 @@ function renderFloatingPanel() {
     attachFriendsListeners(panel);
   } else if (currentTab === 'profile') {
     attachProfileListeners(panel);
+  }
+
+  if (existingCodeVal) {
+    const codeInput = panel.querySelector('#inputFloatingFriendCode') as HTMLInputElement | null;
+    if (codeInput) codeInput.value = existingCodeVal;
+  }
+  if (activeId) {
+    const toFocus = panel.querySelector(`#${activeId}`) as HTMLInputElement | null;
+    if (toFocus) {
+      toFocus.focus();
+      if (selStart !== null && selEnd !== null) {
+        try {
+          toFocus.setSelectionRange(selStart, selEnd);
+        } catch {}
+      }
+    }
   }
 }
 
@@ -692,6 +736,7 @@ async function connectToSession(code: string) {
 function renderFriendsTab(): string {
   const state = store.get();
   const friends = state.settings.friends || [];
+  const pendingRequests = state.settings.pendingFriendRequests || [];
 
   return `
     <div class="floating-tab-pane">
@@ -699,20 +744,67 @@ function renderFriendsTab(): string {
       <div style="background: var(--plate-bg-low); border: 1px solid var(--plate-border); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 14px;">
         <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--ink-secondary); margin-bottom: 8px;">Add a Friend</div>
         <div style="display: flex; gap: 8px;">
-          <input type="text" id="inputFloatingFriendCode" class="cloud-input" placeholder="XXXX-XXXX-XXXX" maxlength="14" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase; height: 36px; font-size: 13px; flex: 1;">
+          <input type="text" id="inputFloatingFriendCode" class="cloud-input" placeholder="Type code XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; height: 36px; font-size: 13px; flex: 1;">
           <button class="btn-primary plate-button" id="btnFloatingAddFriend" style="width: auto; height: 36px; padding: 0 18px; font-size: 12px;">
             Add
           </button>
         </div>
-        <div id="floatingFriendError" style="font-size: 11px; color: var(--compat-broken); margin-top: 6px; display: none;">
+        <div id="floatingFriendError" style="font-size: 11px; color: var(--compat-broken); margin-top: 6px; display: none; font-weight: 600;">
           Invalid Crockford friend code or checksum.
         </div>
       </div>
 
+      ${
+        pendingRequests.length > 0
+          ? `
+        <!-- Pending Friend Requests -->
+        <div style="margin-bottom: 14px;">
+          <div style="margin-bottom: 6px;">
+            <label class="cloud-section-label" style="color: var(--accent-bright);">Friend Requests (${pendingRequests.length})</label>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            ${pendingRequests
+              .map((req) => {
+                const reqAvatar = resolveFriendAvatar(req.code);
+                const reqName = req.name || resolveFriendDisplayName(req.code);
+                return `
+                  <div class="plate" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: var(--radius-sm); border-color: var(--accent-bright);">
+                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                      <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1px solid var(--plate-border); overflow: hidden; flex-shrink: 0;">
+                        ${
+                          reqAvatar
+                            ? `<img src="${reqAvatar}" alt="${reqName}" style="width: 100%; height: 100%; object-fit: cover;">`
+                            : reqName.slice(0, 2).toUpperCase()
+                        }
+                      </div>
+                      <div style="min-width: 0;">
+                        <div style="font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${reqName}</div>
+                        <div style="font-size: 10px; font-family: var(--font-family); color: var(--ink-secondary);">${formatFriendCode(req.code)} · Sent you a friend request</div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 4px; flex-shrink: 0;">
+                      <button class="btn-primary plate-button btn-f-accept-req" data-code="${req.code}" data-name="${reqName}" style="height: 26px; padding: 0 10px; font-size: 10px; width: auto;">
+                        Accept
+                      </button>
+                      <button class="btn-secondary plate-button btn-f-decline-req" data-code="${req.code}" style="height: 26px; padding: 0 8px; font-size: 10px;">
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                `;
+              })
+              .join('')}
+          </div>
+        </div>
+      `
+          : ''
+      }
+
       <!-- Friends List -->
       <div>
-        <div style="margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
           <label class="cloud-section-label">Friends (${friends.length})</label>
+          <span style="font-size: 10px; color: var(--ink-tertiary); font-weight: 600;">Live updates</span>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 6px; max-height: 250px; overflow-y: auto;">
@@ -725,33 +817,44 @@ function renderFriendsTab(): string {
           `
               : friends
                   .map((code) => {
-                    const presence = friendStatuses.present?.[code];
-                    const isOnline = !!presence;
-                    const customNick = state.settings.friendNicknames?.[code];
-                    const name = customNick || friendStatuses.names?.[code] || 'Friend';
-                    const lastGame = friendStatuses.lastGames?.[code];
+                    const name = resolveFriendDisplayName(code);
+                    const avatar = resolveFriendAvatar(code);
+                    const activity = resolveFriendActivity(code);
 
                     return `
                 <div class="plate" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: var(--radius-sm);">
-                  <div style="display: flex; align-items: center; gap: 10px;">
-                    <div style="position: relative;">
-                      <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1px solid var(--plate-border);">
-                        ${name.slice(0, 2).toUpperCase()}
+                  <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                    <div style="position: relative; flex-shrink: 0;">
+                      <div style="width: 34px; height: 34px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1.5px solid var(--plate-border); overflow: hidden;">
+                        ${
+                          avatar
+                            ? `<img src="${avatar}" alt="${name}" style="width: 100%; height: 100%; object-fit: cover;">`
+                            : name.slice(0, 2).toUpperCase()
+                        }
                       </div>
-                      <div style="position: absolute; bottom: 0; right: 0; width: 8px; height: 8px; border-radius: 50%; background: ${isOnline ? 'var(--compat-perfect)' : 'var(--ink-tertiary)'}; border: 1.5px solid var(--plate-bg);"></div>
+                      <div style="position: absolute; bottom: -1px; right: -1px; width: 9px; height: 9px; border-radius: 50%; background: ${activity.isOnline ? 'var(--compat-perfect)' : 'var(--ink-tertiary)'}; border: 1.5px solid var(--plate-bg);"></div>
                     </div>
-                    <div>
+                    <div style="min-width: 0; flex: 1;">
                       <div style="display: flex; align-items: center; gap: 6px;">
-                        <span style="font-weight: 700; font-size: 13px;">${name}</span>
-                        <span style="font-size: 10px; font-family: var(--font-family); color: var(--ink-secondary);">${formatFriendCode(code)}</span>
+                        <span style="font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</span>
+                        <span style="font-size: 10px; font-family: var(--font-family); color: var(--ink-secondary); flex-shrink: 0;">${formatFriendCode(code)}</span>
                       </div>
-                      <div style="font-size: 10px; color: ${isOnline ? 'var(--compat-perfect)' : 'var(--ink-secondary);'}; margin-top: 1px;">
-                        ${isOnline ? `Online · ${lastGame || 'In menu'}` : 'Offline'}
+                      <div style="font-size: 11px; font-weight: ${activity.isPlaying ? '700' : '500'}; color: ${activity.isPlaying ? 'var(--accent-bright)' : activity.isOnline ? 'var(--compat-perfect)' : 'var(--ink-secondary)'}; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        ${activity.statusText}
                       </div>
                     </div>
                   </div>
 
-                  <div style="display: flex; gap: 4px;">
+                  <div style="display: flex; gap: 4px; flex-shrink: 0; margin-left: 8px;">
+                    ${
+                      activity.sessionCode
+                        ? `
+                      <button class="btn-primary plate-button btn-f-join" data-code="${activity.sessionCode}" style="height: 24px; padding: 0 8px; font-size: 10px; width: auto;">
+                        Join
+                      </button>
+                    `
+                        : ''
+                    }
                     <button class="btn-secondary plate-button btn-f-rename" data-code="${code}" style="height: 24px; padding: 0 8px; font-size: 10px;">
                       Rename
                     </button>
@@ -771,78 +874,100 @@ function renderFriendsTab(): string {
 }
 
 function attachFriendsListeners(panel: HTMLElement) {
-  const emuApi = (window as any).emufii;
+  const codeInput = panel.querySelector('#inputFloatingFriendCode') as HTMLInputElement | null;
+  const errorEl = panel.querySelector('#floatingFriendError') as HTMLElement | null;
+
+  if (codeInput) {
+    attachFriendCodeInputFormatter(codeInput);
+    codeInput.addEventListener('input', () => {
+      if (errorEl && errorEl.style.display !== 'none') {
+        errorEl.style.display = 'none';
+      }
+    });
+  }
 
   panel.querySelector('#btnFloatingRefreshFriends')?.addEventListener('click', async () => {
     sfx.play('click');
-    const friends = store.get().settings.friends || [];
-    if (friends.length > 0) {
-      try {
-        friendStatuses = await emuApi.coordinator.friendStatuses(friends);
-      } catch {}
-    }
+    await syncFriendsRealtime();
     renderFloatingPanel();
   });
 
   const submitAddFriend = async () => {
-    const codeInput = panel.querySelector('#inputFloatingFriendCode') as HTMLInputElement;
-    const errorEl = panel.querySelector('#floatingFriendError') as HTMLElement;
     if (!codeInput) return;
-
-    const raw = codeInput.value.trim().toUpperCase().replace(/[^0-9A-TV-Z]/g, '');
-    if (!isValidFriendCode(raw)) {
-      if (errorEl) errorEl.style.display = 'block';
+    const res = await addFriendWithSync(codeInput.value);
+    if (!res.ok) {
+      if (errorEl) {
+        errorEl.textContent = res.error || 'Invalid friend code.';
+        errorEl.style.display = 'block';
+      }
       sfx.play('tick');
       return;
     }
 
     if (errorEl) errorEl.style.display = 'none';
+    codeInput.value = '';
     sfx.play('confirm');
-    await emuApi.config.addFriend(raw);
-    const updated = await emuApi.config.get();
-    store.set({ settings: updated.settings });
-
-    try {
-      friendStatuses = await emuApi.coordinator.friendStatuses(updated.settings.friends);
-    } catch {}
-
     renderFloatingPanel();
   };
 
   panel.querySelector('#btnFloatingAddFriend')?.addEventListener('click', submitAddFriend);
-  panel.querySelector<HTMLInputElement>('#inputFloatingFriendCode')?.addEventListener('keydown', (e: KeyboardEvent) => {
+  codeInput?.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key === 'Enter') {
+      e.preventDefault();
       submitAddFriend();
     }
   });
 
-  panel.querySelectorAll('.btn-f-rename').forEach((btn) => {
+  panel.querySelectorAll('.btn-f-accept-req').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      sfx.play('confirm');
+      const target = e.currentTarget as HTMLElement;
+      const code = target.dataset.code;
+      const name = target.dataset.name;
+      if (!code) return;
+      await acceptFriendRequest(code, name);
+      renderFloatingPanel();
+    });
+  });
+
+  panel.querySelectorAll('.btn-f-decline-req').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       sfx.play('click');
       const code = (e.currentTarget as HTMLElement).dataset.code;
       if (!code) return;
-      const current = store.get().settings.friendNicknames?.[code] || '';
-      const newNick = prompt('Enter a nickname for this friend:', current);
-      if (newNick !== null) {
-        await emuApi.config.addFriend(code, newNick.trim() || undefined);
-        const updated = await emuApi.config.get();
-        store.set({ settings: updated.settings });
-        renderFloatingPanel();
+      await declineFriendRequest(code);
+      renderFloatingPanel();
+    });
+  });
+
+  panel.querySelectorAll('.btn-f-join').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const sessionCode = (e.currentTarget as HTMLElement).dataset.code;
+      if (sessionCode) {
+        connectToSession(sessionCode);
       }
     });
   });
 
-  panel.querySelectorAll('.btn-f-remove').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
-      sfx.play('click');
+  panel.querySelectorAll('.btn-f-rename').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
       const code = (e.currentTarget as HTMLElement).dataset.code;
       if (!code) return;
-      if (confirm('Remove this friend?')) {
-        await emuApi.config.removeFriend(code);
-        const updated = await emuApi.config.get();
-        store.set({ settings: updated.settings });
-        renderFloatingPanel();
-      }
+      promptRenameFriendModal({
+        code,
+        onRenamed: () => renderFloatingPanel(),
+      });
+    });
+  });
+
+  panel.querySelectorAll('.btn-f-remove').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const code = (e.currentTarget as HTMLElement).dataset.code;
+      if (!code) return;
+      confirmRemoveFriendModal({
+        code,
+        onRemoved: () => renderFloatingPanel(),
+      });
     });
   });
 }
@@ -1039,10 +1164,16 @@ function attachProfileListeners(panel: HTMLElement) {
     if (dataUrl) {
       await emuApi.config.updateProfile({ avatarDataUrl: dataUrl });
       store.set({ profile: { ...store.get().profile, avatarDataUrl: dataUrl } });
-      const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
       const pid = store.get().profile.id;
+      const ownerKey = store.get().profile.ownerKey || pid;
       if (pid) {
-        emuApi.coordinator.uploadAvatar(pid, pid, base64).catch(() => {});
+        encodeAvatarToWebpBase64(dataUrl)
+          .then((webpBase64) => {
+            if (webpBase64) {
+              emuApi.coordinator.uploadAvatar(pid, ownerKey, webpBase64).catch(() => {});
+            }
+          })
+          .catch(() => {});
       }
       renderFloatingPanel();
     }

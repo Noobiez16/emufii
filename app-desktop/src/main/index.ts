@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import { Storage } from './library/storage.js';
 import { setupIpc } from './ipc.js';
 import { EmulatorDownloader } from './emulators/downloader.js';
-import { SwitchKeyManager } from './emulators/switchKeys.js';
 
 let mainWindow: BrowserWindow | null = null;
 let installerWindow: BrowserWindow | null = null;
@@ -126,10 +125,6 @@ app.whenReady().then(() => {
       EmulatorDownloader.downloadAll((consoleType, percent, status) => {
         mainWindow?.webContents.send('emulators:download-progress', { consoleType, percent, status });
       }).catch(() => {});
-
-      // Auto-provision Switch decryption keys and configuration across emulators
-      const vaultPath = storage.getConfig().settings.romDirectories[0];
-      SwitchKeyManager.autoProvisionKeys(vaultPath).catch(() => {});
     }, 1000);
   }
 

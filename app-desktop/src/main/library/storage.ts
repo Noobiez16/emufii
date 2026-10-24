@@ -1,14 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { app } from 'electron';
-import { generateFriendCode, isValidFriendCode } from '../profile/friendCode.js';
+import { generateFriendCode, isValidFriendCode, normalizeFriendCode } from '../profile/friendCode.js';
 import { WireGuardManager, WgKeys } from '../network/wireguard.js';
+
+export interface FriendRequestItem {
+  code: string;
+  name: string;
+  avatarDataUrl?: string | null;
+  at: number;
+}
 
 export interface AppConfig {
   profile: {
     id: string;
     name: string;
     avatarDataUrl?: string | null;
+    ownerKey?: string;
   };
   wgKeys: WgKeys;
   settings: {
@@ -26,12 +35,17 @@ export interface AppConfig {
     customTitles: Record<string, string>;
     friends: string[];
     friendNicknames: Record<string, string>;
+    friendNames?: Record<string, string>;
+    friendAvatars?: Record<string, string>;
+    friendAvatarHashes?: Record<string, string>;
+    pendingFriendRequests?: FriendRequestItem[];
     steamGridDbKey?: string;
     language: 'system' | 'en' | 'es' | 'fr';
     hiddenConsoles: string[];
     hideIncompatible: boolean;
     notifyFriends: boolean;
     shareLastGame: boolean;
+    autoDownloadUpdates: boolean;
   };
 }
 
@@ -84,10 +98,16 @@ export class Storage {
     if (!id || !isValidFriendCode(id)) {
       id = generateFriendCode();
     }
+    const ownerKey =
+      loaded.profile?.ownerKey && /^[0-9a-f]{64}$/i.test(loaded.profile.ownerKey)
+        ? loaded.profile.ownerKey
+        : crypto.randomBytes(32).toString('hex');
+
     const profile = {
       id,
       name: loaded.profile?.name || 'Joueur',
       avatarDataUrl: loaded.profile?.avatarDataUrl || null,
+      ownerKey,
     };
 
     // Default WireGuard keys
@@ -103,8 +123,14 @@ export class Storage {
       romDirs = [specialRomDir, ...romDirs];
     }
 
+    // Filter out self from friends list if ever present
+    const rawFriends = loaded.settings?.friends || [];
+    const cleanFriends = rawFriends
+      .map((c) => normalizeFriendCode(c) || c)
+      .filter((c, idx, arr) => c && c !== id && arr.indexOf(c) === idx);
+
     // Default Settings
-    const settings = {
+    const settings: AppConfig['settings'] = {
       romDirectories: romDirs,
       romFiles: loaded.settings?.romFiles || [],
       theme: (loaded.settings?.theme as any) || 'dark',
@@ -117,14 +143,19 @@ export class Storage {
       customEmulatorPaths: loaded.settings?.customEmulatorPaths || {},
       hiddenRoms: loaded.settings?.hiddenRoms || [],
       customTitles: loaded.settings?.customTitles || {},
-      friends: loaded.settings?.friends || [],
+      friends: cleanFriends,
       friendNicknames: loaded.settings?.friendNicknames || {},
+      friendNames: loaded.settings?.friendNames || {},
+      friendAvatars: loaded.settings?.friendAvatars || {},
+      friendAvatarHashes: loaded.settings?.friendAvatarHashes || {},
+      pendingFriendRequests: loaded.settings?.pendingFriendRequests || [],
       steamGridDbKey: loaded.settings?.steamGridDbKey || '',
       language: (loaded.settings?.language as any) || 'system',
       hiddenConsoles: loaded.settings?.hiddenConsoles || [],
       hideIncompatible: !!loaded.settings?.hideIncompatible,
       notifyFriends: loaded.settings?.notifyFriends !== false,
       shareLastGame: loaded.settings?.shareLastGame !== false,
+      autoDownloadUpdates: loaded.settings?.autoDownloadUpdates !== false,
     };
 
     const config: AppConfig = { profile, wgKeys, settings };
@@ -159,20 +190,91 @@ export class Storage {
     return this.config.settings;
   }
 
-  addFriend(code: string, nickname?: string) {
-    if (!this.config.settings.friends.includes(code)) {
-      this.config.settings.friends.push(code);
+  addFriend(code: string, nickname?: string): { ok: boolean; error?: 'invalid' | 'self' | 'duplicate'; code?: string } {
+    const normalized = normalizeFriendCode(code);
+    if (!normalized) {
+      return { ok: false, error: 'invalid' };
     }
-    if (nickname) {
-      this.config.settings.friendNicknames[code] = nickname;
+    const myCode = normalizeFriendCode(this.config.profile.id) || this.config.profile.id;
+    if (normalized === myCode) {
+      return { ok: false, error: 'self' };
+    }
+
+    const alreadyExisted = this.config.settings.friends.includes(normalized);
+    if (!alreadyExisted) {
+      this.config.settings.friends.push(normalized);
+    }
+
+    if (nickname !== undefined) {
+      const trimmed = nickname.trim();
+      if (trimmed) {
+        this.config.settings.friendNicknames[normalized] = trimmed;
+      } else {
+        delete this.config.settings.friendNicknames[normalized];
+      }
+    }
+
+    // Remove from pending requests if present
+    if (this.config.settings.pendingFriendRequests) {
+      this.config.settings.pendingFriendRequests = this.config.settings.pendingFriendRequests.filter(
+        (r) => r.code !== normalized
+      );
+    }
+
+    this.save();
+    return { ok: true, code: normalized };
+  }
+
+  removeFriend(code: string) {
+    const normalized = normalizeFriendCode(code) || code;
+    this.config.settings.friends = this.config.settings.friends.filter((c) => c !== normalized && c !== code);
+    delete this.config.settings.friendNicknames[normalized];
+    delete this.config.settings.friendNicknames[code];
+    if (this.config.settings.friendNames) {
+      delete this.config.settings.friendNames[normalized];
+    }
+    if (this.config.settings.friendAvatars) {
+      delete this.config.settings.friendAvatars[normalized];
+    }
+    if (this.config.settings.friendAvatarHashes) {
+      delete this.config.settings.friendAvatarHashes[normalized];
     }
     this.save();
   }
 
-  removeFriend(code: string) {
-    this.config.settings.friends = this.config.settings.friends.filter((c) => c !== code);
-    delete this.config.settings.friendNicknames[code];
-    this.save();
+  noteFriendMetadata(
+    names: Record<string, string>,
+    avatars?: Record<string, string>,
+    hashes?: Record<string, string>
+  ) {
+    let changed = false;
+    if (!this.config.settings.friendNames) this.config.settings.friendNames = {};
+    if (!this.config.settings.friendAvatars) this.config.settings.friendAvatars = {};
+    if (!this.config.settings.friendAvatarHashes) this.config.settings.friendAvatarHashes = {};
+
+    for (const [code, name] of Object.entries(names || {})) {
+      if (name && name.trim() && this.config.settings.friendNames[code] !== name.trim()) {
+        this.config.settings.friendNames[code] = name.trim();
+        changed = true;
+      }
+    }
+    for (const [code, dataUrl] of Object.entries(avatars || {})) {
+      if (dataUrl && this.config.settings.friendAvatars[code] !== dataUrl) {
+        this.config.settings.friendAvatars[code] = dataUrl;
+        changed = true;
+      }
+    }
+    for (const [code, hash] of Object.entries(hashes || {})) {
+      if (hash && this.config.settings.friendAvatarHashes[code] !== hash) {
+        this.config.settings.friendAvatarHashes[code] = hash;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.save();
+    }
+    return this.config.settings;
   }
 
   renameRom(romId: string, customTitle: string) {
@@ -248,12 +350,16 @@ export class Storage {
       id: generateFriendCode(),
       name: 'Joueur',
       avatarDataUrl: null,
+      ownerKey: crypto.randomBytes(32).toString('hex'),
     };
     this.config.wgKeys = WireGuardManager.generateKeyPair();
     this.config.settings.friends = [];
     this.config.settings.friendNicknames = {};
+    this.config.settings.friendNames = {};
+    this.config.settings.friendAvatars = {};
+    this.config.settings.friendAvatarHashes = {};
+    this.config.settings.pendingFriendRequests = [];
     this.save();
     return this.config;
   }
 }
-

@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app, shell, nativeImage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { Storage, ensureSpecialRomDirectory, getSpecialRomDirectory } from './library/storage.js';
@@ -7,7 +7,23 @@ import { CoordinatorClient } from './network/coordinator.js';
 import { WireGuardManager } from './network/wireguard.js';
 import { EmulatorManager } from './emulators/manager.js';
 import { EmulatorDownloader } from './emulators/downloader.js';
-import { SwitchKeyManager } from './emulators/switchKeys.js';
+
+function parseSemver(v: string): number[] {
+  const clean = (v || '').replace(/^v/i, '').split('-')[0];
+  return clean.split('.').map((n) => parseInt(n, 10) || 0);
+}
+
+function isNewerSemver(current: string, latest: string): boolean {
+  const c = parseSemver(current);
+  const l = parseSemver(latest);
+  for (let i = 0; i < Math.max(c.length, l.length); i++) {
+    const cv = c[i] || 0;
+    const lv = l[i] || 0;
+    if (lv > cv) return true;
+    if (lv < cv) return false;
+  }
+  return false;
+}
 
 export function setupIpc(
   mainWindow: BrowserWindow,
@@ -19,7 +35,9 @@ export function setupIpc(
     ipcMain.handle(channel, handler);
   }
 
-  const coordinator = new CoordinatorClient(storage.getConfig().settings.coordinatorUrl);
+  const initialConfig = storage.getConfig();
+  CoordinatorClient.identityKey = initialConfig.profile.ownerKey || null;
+  const coordinator = new CoordinatorClient(initialConfig.settings.coordinatorUrl);
   const wireguard = new WireGuardManager();
 
   // --- Window controls ---
@@ -69,10 +87,17 @@ export function setupIpc(
   });
   safeHandle('config:addFriend', (_, code, nickname) => storage.addFriend(code, nickname));
   safeHandle('config:removeFriend', (_, code) => storage.removeFriend(code));
+  safeHandle('config:noteFriendMetadata', (_, names, avatars, hashes) =>
+    storage.noteFriendMetadata(names, avatars, hashes)
+  );
   safeHandle('config:renameRom', (_, id, title) => storage.renameRom(id, title));
   safeHandle('config:toggleHideRom', (_, id) => storage.toggleHideRom(id));
   safeHandle('config:restoreHiddenRoms', () => storage.restoreHiddenRoms());
-  safeHandle('config:resetProfile', () => storage.resetProfile());
+  safeHandle('config:resetProfile', () => {
+    const resetCfg = storage.resetProfile();
+    CoordinatorClient.identityKey = resetCfg.profile.ownerKey || null;
+    return resetCfg;
+  });
   safeHandle('config:setConsoleVisible', (_, consoleName, visible) =>
     storage.setConsoleVisible(consoleName, visible)
   );
@@ -149,6 +174,22 @@ export function setupIpc(
     });
     if (res.canceled || !res.filePaths[0]) return null;
     const file = res.filePaths[0];
+    try {
+      const img = nativeImage.createFromPath(file);
+      if (!img.isEmpty()) {
+        const size = img.getSize();
+        const side = Math.min(size.width, size.height);
+        const cropped = img.crop({
+          x: Math.floor((size.width - side) / 2),
+          y: Math.floor((size.height - side) / 2),
+          width: side,
+          height: side,
+        });
+        const resized = cropped.resize({ width: 256, height: 256, quality: 'better' });
+        const jpegBuf = resized.toJPEG(85);
+        return `data:image/jpeg;base64,${jpegBuf.toString('base64')}`;
+      }
+    } catch {}
     const data = fs.readFileSync(file);
     const mime = file.endsWith('.png') ? 'image/png' : file.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
     return `data:${mime};base64,${data.toString('base64')}`;
@@ -317,18 +358,31 @@ export function setupIpc(
   safeHandle('coordinator:announcePresence', (_, id, name, inSession) =>
     coordinator.announcePresence(id, name, inSession)
   );
-  safeHandle('coordinator:announceLastGame', (_, id, title, titleId) =>
-    coordinator.announceLastGame(id, title, titleId)
-  );
+  safeHandle('coordinator:announceLastGame', (_, id, title, titleId) => {
+    const profileName = storage.getConfig().profile?.name || null;
+    return coordinator.announceLastGame(id, title, titleId, profileName);
+  });
   safeHandle('coordinator:friendStatuses', (_, codes) => coordinator.friendStatuses(codes));
   safeHandle('coordinator:claimAddress', (_, code, pubKey, name, profileId) =>
     coordinator.claimAddress(code, pubKey, name, profileId)
   );
-  safeHandle('coordinator:uploadAvatar', (_, id, key, imageBase64) =>
-    coordinator.uploadAvatar(id, key, imageBase64)
+  safeHandle('coordinator:uploadAvatar', (_, id, key, imageBase64) => {
+    const effectiveKey = key && key.length >= 32 ? key : storage.getConfig().profile.ownerKey || key;
+    return coordinator.uploadAvatar(id, effectiveKey, imageBase64);
+  });
+  safeHandle('coordinator:deleteAvatar', (_, id, key) => {
+    const effectiveKey = key && key.length >= 32 ? key : storage.getConfig().profile.ownerKey || key;
+    return coordinator.deleteAvatar(id, effectiveKey);
+  });
+  safeHandle('coordinator:fetchAvatar', (_, id: string) => coordinator.fetchAvatar(id));
+  safeHandle('coordinator:fetchMemberAvatar', (_, code: string, handle: string) =>
+    coordinator.fetchMemberAvatar(code, handle)
   );
-  safeHandle('coordinator:deleteAvatar', (_, id, key) =>
-    coordinator.deleteAvatar(id, key)
+  safeHandle('coordinator:sendFriendRequest', (_, targetCode: string, fromCode: string, fromName: string) =>
+    coordinator.sendFriendRequest(targetCode, fromCode, fromName)
+  );
+  safeHandle('coordinator:clearFriendRequestInbox', (_, myCode: string) =>
+    coordinator.clearFriendRequestInbox(myCode)
   );
   safeHandle('coordinator:reportJoinFailure', (_, reason, consoleType, code) =>
     coordinator.reportJoinFailure(reason, consoleType, code)
@@ -372,26 +426,168 @@ export function setupIpc(
       mainWindow.webContents.send('emulators:download-progress', { consoleType, percent, status });
     });
   });
-  safeHandle('emulators:switchKeyStatus', () => {
-    return SwitchKeyManager.getStatus();
-  });
-  safeHandle('emulators:provisionSwitchKeys', async () => {
-    const vault = storage.getConfig().settings.romDirectories[0];
-    const success = await SwitchKeyManager.autoProvisionKeys(vault);
-    return { success, status: SwitchKeyManager.getStatus() };
-  });
   safeHandle('emulators:isDownloaded', (_, consoleType: string) => {
     return EmulatorDownloader.isDownloaded(consoleType);
   });
   safeHandle('emulators:launchGame', (_, consoleType, options) => {
-    const custom = storage.getConfig().settings.customEmulatorPaths[consoleType];
+    const cfg = storage.getConfig();
+    const custom = cfg.settings.customEmulatorPaths[consoleType];
     const appRes = app.isPackaged
       ? path.join(process.resourcesPath)
       : path.join(__dirname, '..', '..', 'src', 'renderer', 'assets');
+
+    if (cfg.settings.shareLastGame !== false && cfg.profile?.id && options?.romPath) {
+      const fallbackName = path.basename(options.romPath, path.extname(options.romPath));
+      const gameTitle = options.romTitle || options.displayName || fallbackName;
+      if (gameTitle) {
+        coordinator
+          .announceLastGame(cfg.profile.id, gameTitle, options.titleId || null, cfg.profile.name)
+          .catch(() => {});
+      }
+    }
+
     return EmulatorManager.launchGame(consoleType, {
       ...options,
       customExecutable: custom,
       appResourceDir: appRes,
     });
+  });
+
+  // --- Application Updates ---
+  safeHandle('app:checkForUpdates', async () => {
+    const currentVersion = app.getVersion() || '2.0.3';
+    const repos = ['Noobiez16/emufii', 'jojodogm-ctrl/emufii'];
+    let releaseData: any = null;
+
+    for (const repo of repos) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+          headers: { 'User-Agent': 'Emufii-Desktop' },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.tag_name) {
+            releaseData = json;
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    if (!releaseData) {
+      return {
+        ok: true,
+        currentVersion,
+        latestVersion: currentVersion,
+        updateAvailable: false,
+        releaseUrl: 'https://github.com/Noobiez16/emufii/releases',
+        downloadUrl: 'https://github.com/Noobiez16/emufii/releases',
+        assetName: null,
+        notes: 'Your Emufii Desktop installation is up to date.',
+      };
+    }
+
+    const rawTag: string = releaseData.tag_name || currentVersion;
+    const latestVersion = rawTag.replace(/^v/i, '').replace(/-desktop.*$/i, '');
+    const updateAvailable = isNewerSemver(currentVersion, latestVersion);
+    const assets: any[] = Array.isArray(releaseData.assets) ? releaseData.assets : [];
+    const platform = process.platform;
+
+    let matchedAsset = null;
+    if (platform === 'win32') {
+      matchedAsset = assets.find((a) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.exe'));
+    } else if (platform === 'linux') {
+      matchedAsset =
+        assets.find((a) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.appimage')) ||
+        assets.find((a) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.deb'));
+    } else if (platform === 'darwin') {
+      matchedAsset = assets.find((a) => typeof a.name === 'string' && a.name.toLowerCase().endsWith('.dmg'));
+    }
+
+    return {
+      ok: true,
+      currentVersion,
+      latestVersion,
+      updateAvailable,
+      releaseUrl: releaseData.html_url || 'https://github.com/Noobiez16/emufii/releases',
+      downloadUrl: matchedAsset?.browser_download_url || releaseData.html_url || 'https://github.com/Noobiez16/emufii/releases',
+      assetName: matchedAsset?.name || null,
+      notes: releaseData.body || 'Includes the latest Emufii Desktop improvements, real-time friend status updates, and emulator configurations.',
+    };
+  });
+
+  safeHandle('app:performUpdate', async (_, info: { downloadUrl?: string; assetName?: string | null; releaseUrl?: string }) => {
+    const url = info?.downloadUrl || info?.releaseUrl || 'https://github.com/Noobiez16/emufii/releases';
+    const assetName = info?.assetName;
+
+    if (!assetName || !url.startsWith('http') || (!assetName.endsWith('.exe') && !assetName.endsWith('.AppImage') && !assetName.endsWith('.deb') && !assetName.endsWith('.dmg'))) {
+      await shell.openExternal(info?.releaseUrl || url);
+      return { success: true, openedBrowser: true };
+    }
+
+    try {
+      const downloadsDir = app.getPath('downloads');
+      const destPath = path.join(downloadsDir, assetName);
+
+      mainWindow.webContents.send('app:update-progress', { percent: 5, status: `Connecting to download ${assetName}...` });
+
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'Emufii-Desktop' },
+        redirect: 'follow',
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const totalBytes = Number(response.headers.get('content-length')) || 0;
+      let receivedBytes = 0;
+      const fileStream = fs.createWriteStream(destPath);
+
+      for await (const chunk of response.body as any) {
+        fileStream.write(chunk);
+        receivedBytes += chunk.length;
+        const mbDone = (receivedBytes / 1024 / 1024).toFixed(1);
+        if (totalBytes > 0) {
+          const mbTotal = (totalBytes / 1024 / 1024).toFixed(1);
+          const percent = Math.min(96, Math.round((receivedBytes / totalBytes) * 90) + 5);
+          mainWindow.webContents.send('app:update-progress', {
+            percent,
+            status: `Downloading update (${mbDone} MB / ${mbTotal} MB)...`,
+          });
+        } else {
+          mainWindow.webContents.send('app:update-progress', {
+            percent: 55,
+            status: `Downloading update (${mbDone} MB)...`,
+          });
+        }
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        fileStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+      });
+
+      if (process.platform === 'linux' && assetName.endsWith('.AppImage')) {
+        try {
+          fs.chmodSync(destPath, 0o755);
+        } catch {}
+      }
+
+      mainWindow.webContents.send('app:update-progress', {
+        percent: 100,
+        status: 'Update downloaded! Opening installer...',
+      });
+
+      if (process.platform === 'win32' && assetName.endsWith('.exe')) {
+        await shell.openPath(destPath);
+      } else {
+        shell.showItemInFolder(destPath);
+      }
+
+      return { success: true, filePath: destPath };
+    } catch (err: any) {
+      await shell.openExternal(info?.releaseUrl || url);
+      return { success: true, openedBrowser: true, fallbackReason: err.message };
+    }
   });
 }

@@ -3,6 +3,8 @@ import { sfx } from '../sfx.js';
 import { t } from '../i18n.js';
 import type { EmulatorInfo } from '../../../main/emulators/manager.js';
 import { CONSOLES_LIST, updateSegmentedGlider, setupAllSegmentedGliders } from '../screens/SettingsScreen.js';
+import { ensureEmulator } from './EmulatorDownloadModal.js';
+import { openUpdateModal } from './UpdateModal.js';
 
 export type SettingsModalTab = 'general' | 'library' | 'consoles' | 'emulators' | 'appearance' | 'about' | 'crashlogs';
 
@@ -65,13 +67,9 @@ async function renderSettingsContent(dialog: HTMLDialogElement) {
   if (!content) return;
 
   let detectedEmulators: Record<string, EmulatorInfo> = {};
-  let switchKeyStatus: any = null;
   if (activeTab === 'emulators' && emuApi?.emulators?.detectAll) {
     try {
       detectedEmulators = await emuApi.emulators.detectAll();
-      if (emuApi.emulators.getSwitchKeyStatus) {
-        switchKeyStatus = await emuApi.emulators.getSwitchKeyStatus();
-      }
     } catch {
       detectedEmulators = {};
     }
@@ -117,7 +115,7 @@ async function renderSettingsContent(dialog: HTMLDialogElement) {
 
       <!-- Settings Content Body -->
       <div class="cloud-body settings-cloud-body" style="overflow-y: auto; flex: 1 1 auto; min-height: 0; padding-bottom: 34px;">
-        ${renderModalTabBody(activeTab, state, settings, accents, detectedEmulators, switchKeyStatus)}
+        ${renderModalTabBody(activeTab, state, settings, accents, detectedEmulators)}
       </div>
     </div>
   `;
@@ -161,8 +159,7 @@ function renderModalTabBody(
   state: any,
   settings: any,
   accents: any[],
-  detected: Record<string, EmulatorInfo>,
-  switchKeys?: any
+  detected: Record<string, EmulatorInfo>
 ): string {
   switch (tab) {
     case 'general':
@@ -328,11 +325,18 @@ function renderModalTabBody(
       const emuEntries = Object.entries(detected || {});
       return `
         <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: flex-end;">
+            <button class="btn-primary plate-button" id="btnModalDownloadAllEmus" style="height: 28px; padding: 0 12px; font-size: 11px; border-radius: 9999px; width: auto;">
+              ${t('download_all')}
+            </button>
+          </div>
           <div class="settings-clean-group" style="margin-bottom: 0;">
             ${emuEntries.length === 0 ? '<div style="padding: 16px; text-align: center; font-size: 12px; color: var(--ink-secondary);">Scanning emulators...</div>' : ''}
             ${emuEntries
               .map(([consoleKey, emu]) => {
                 const isInstalled = emu.isInstalled;
+                const pathLower = (emu.executablePath || '').toLowerCase();
+                const isManaged = pathLower.includes('emufii/emulators') || pathLower.includes('emufii\\emulators');
                 return `
                   <div class="settings-clean-row" style="padding: 10px 16px;">
                     <div>
@@ -342,41 +346,29 @@ function renderModalTabBody(
                         <span class="badge" style="font-size: 9px; font-weight: 800; background: ${
                           isInstalled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'
                         }; color: ${isInstalled ? '#10b981' : '#ef4444'};">
-                          ${isInstalled ? t('ready').toUpperCase() : t('missing').toUpperCase()}
+                          ${isManaged ? 'AUTO-CONFIGURED' : isInstalled ? t('ready').toUpperCase() : t('missing').toUpperCase()}
                         </span>
                       </div>
                       <div style="font-size: 11px; color: var(--ink-secondary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                        ${emu.executablePath || 'Not configured'}
+                        ${emu.executablePath || 'Auto-Download Ready (Windows & Linux)'}
                       </div>
                     </div>
-                    <button class="btn-secondary plate-button btnModalBrowseEmu" data-console="${consoleKey}" data-name="${emu.name}" style="height: 28px; padding: 0 10px; font-size: 11px; border-radius: 9999px;">
-                      ${t('browse_binary')}
-                    </button>
+                    <div style="display: flex; gap: 6px;">
+                      <button class="btn-secondary plate-button btnModalBrowseEmu" data-console="${consoleKey}" data-name="${emu.name}" style="height: 28px; padding: 0 10px; font-size: 11px; border-radius: 9999px;">
+                        ${t('browse_binary')}
+                      </button>
+                      ${
+                        !isInstalled
+                          ? `<button class="btn-primary plate-button btnModalDownloadEmu" data-console="${consoleKey}" style="height: 28px; padding: 0 10px; font-size: 11px; border-radius: 9999px; width: auto;">
+                              ${t('download_btn')}
+                            </button>`
+                          : ''
+                      }
+                    </div>
                   </div>
                 `;
               })
               .join('')}
-          </div>
-
-          <div class="settings-clean-group" style="margin-top: 10px; margin-bottom: 0;">
-            <div class="settings-clean-row" style="padding: 10px 16px;">
-              <div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <strong style="font-size: 13px; color: var(--ink-primary);">Switch Decryption Keys</strong>
-                  <span class="badge" style="font-size: 9px; font-weight: 800; background: ${
-                    switchKeys?.isInstalled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'
-                  }; color: ${switchKeys?.isInstalled ? '#10b981' : '#ef4444'};">
-                    ${switchKeys?.isInstalled ? `READY (${switchKeys.version || 'v19'})` : 'MISSING'}
-                  </span>
-                </div>
-                <div style="font-size: 11px; color: var(--ink-secondary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  ${switchKeys?.isInstalled ? 'Auto-synced across Ryujinx, Eden & Yuzu' : 'Required to decrypt and boot Nintendo Switch games'}
-                </div>
-              </div>
-              <button class="btn-secondary plate-button btnSyncSwitchKeys" style="height: 28px; padding: 0 10px; font-size: 11px; border-radius: 9999px;">
-                ${switchKeys?.isInstalled ? 'Re-sync Keys' : 'Auto-Setup Keys'}
-              </button>
-            </div>
           </div>
         </div>
       `;
@@ -463,6 +455,29 @@ function renderModalTabBody(
               ${t('about_license')}
             </div>
           </div>
+
+          <div class="settings-clean-group" style="margin-bottom: 0;">
+            <div class="settings-clean-row">
+              <div>
+                <div class="settings-label">${t('auto_download_updates')}</div>
+                <div class="settings-sublabel">${t('auto_download_updates_sub')}</div>
+              </div>
+              <label class="clean-switch">
+                <input type="checkbox" id="chkModalAutoDownloadUpdates" ${settings.autoDownloadUpdates !== false ? 'checked' : ''}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="settings-clean-row">
+              <div>
+                <div class="settings-label">${t('check_updates_title')}</div>
+                <div class="settings-sublabel">${t('check_updates_sub')}</div>
+              </div>
+              <button class="btn-primary plate-button" id="btnModalCheckForUpdates" style="height: 30px; padding: 0 14px; font-size: 11px; border-radius: 9999px; width: auto;">
+                ${t('check_updates_btn')}
+              </button>
+            </div>
+          </div>
+
           <div style="display: flex; gap: 8px;">
             <button class="btn-primary plate-button" id="btnModalDiscord" style="flex: 1; height: 32px; font-size: 11px; border-radius: 9999px;">Discord</button>
             <button class="btn-secondary plate-button" id="btnModalKofi" style="flex: 1; height: 32px; font-size: 11px; border-radius: 9999px;">Ko-fi</button>
@@ -651,21 +666,25 @@ function attachModalTabListeners(
       });
     });
 
-    const btnSync = content.querySelector('.btnSyncSwitchKeys') as HTMLButtonElement;
-    if (btnSync) {
-      btnSync.addEventListener('click', async () => {
+    content.querySelectorAll('.btnModalDownloadEmu').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
         sfx.play('click');
-        btnSync.disabled = true;
-        btnSync.textContent = 'Syncing...';
-        try {
-          await emuApi.emulators.provisionSwitchKeys();
+        const targetConsole = (e.currentTarget as HTMLElement).dataset.console;
+        if (targetConsole) {
+          await ensureEmulator(targetConsole);
           renderSettingsContent(dialog);
-        } catch {
-          btnSync.disabled = false;
-          btnSync.textContent = 'Retry Sync';
         }
       });
-    }
+    });
+
+    content.querySelector('#btnModalDownloadAllEmus')?.addEventListener('click', async () => {
+      sfx.play('click');
+      const supportedDownloads = ['GameCube', 'PS2', 'PSP', 'DS', 'GBA', '3DS'];
+      for (const c of supportedDownloads) {
+        await ensureEmulator(c);
+      }
+      renderSettingsContent(dialog);
+    });
   } else if (tab === 'appearance') {
     content.querySelectorAll('[data-theme]').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
@@ -716,6 +735,21 @@ function attachModalTabListeners(
       store.set({ settings: { ...store.get().settings, animations: val } });
     });
   } else if (tab === 'about') {
+    content.querySelector('#chkModalAutoDownloadUpdates')?.addEventListener('change', async (e) => {
+      const checked = (e.target as HTMLInputElement).checked;
+      await emuApi.config.updateSettings({ autoDownloadUpdates: checked });
+      store.set({ settings: { ...store.get().settings, autoDownloadUpdates: checked } });
+      sfx.play('toggle');
+    });
+    content.querySelector('#btnModalCheckForUpdates')?.addEventListener('click', async () => {
+      sfx.play('click');
+      try {
+        const res = await emuApi.updates.check();
+        if (res) {
+          openUpdateModal(res);
+        }
+      } catch {}
+    });
     content.querySelector('#btnModalDiscord')?.addEventListener('click', () => {
       window.open('https://discord.gg/tvWcb28vBZ', '_blank');
     });

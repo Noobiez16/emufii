@@ -10,8 +10,16 @@ import { renderFriendsScreen } from './js/screens/FriendsScreen.js';
 import { renderSessionFinderScreen } from './js/screens/SessionFinderScreen.js';
 import { renderSettingsScreen, resetSettingsView } from './js/screens/SettingsScreen.js';
 import { openSettingsModal, resolveTheme } from './js/components/SettingsModal.js';
-import { toggleFloatingPanel, closeFloatingPanel, isFloatingPanelOpen } from './js/components/FloatingPanel.js';
+import {
+  toggleFloatingPanel,
+  closeFloatingPanel,
+  isFloatingPanelOpen,
+  getFloatingPanelTab,
+  renderFloatingPanel,
+} from './js/components/FloatingPanel.js';
 import { TrayBackdrop } from './js/components/TrayBackdrop.js';
+import { syncFriendsRealtime, encodeAvatarToWebpBase64 } from './js/components/FriendActionModal.js';
+import { openUpdateModal } from './js/components/UpdateModal.js';
 
 const emuApi = (window as any).emufii;
 
@@ -81,7 +89,7 @@ async function bootstrap() {
 
   emuApi.window.isMaximized?.().then((isMax: boolean) => {
     if (isMax) updateMaximizeUI(true);
-  }).catch(() => {});
+  }).catch(() => { });
 
   // 4. Header Navigation Buttons -> Floating Cloud Panel
   document.getElementById('headerFinderBtn')?.addEventListener('click', () => {
@@ -229,11 +237,53 @@ async function bootstrap() {
     if (s.profile.id && s.profile.name) {
       try {
         await emuApi.coordinator.announcePresence(s.profile.id, s.profile.name, false);
-      } catch {}
+      } catch { }
     }
   };
   syncPresence();
   setInterval(syncPresence, 45000);
+
+  // Sync user's own avatar to coordinator on startup if set
+  if (config.profile?.id && config.profile?.avatarDataUrl) {
+    encodeAvatarToWebpBase64(config.profile.avatarDataUrl)
+      .then((webpBase64) => {
+        if (webpBase64) {
+          emuApi.coordinator
+            .uploadAvatar(
+              config.profile.id,
+              config.profile.ownerKey || config.profile.id,
+              webpBase64
+            )
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+
+  // Real-time friend status & friend request polling (every 5 seconds)
+  const pollFriendsRealtime = () => {
+    syncFriendsRealtime(() => {
+      if (isFloatingPanelOpen() && getFloatingPanelTab() === 'friends') {
+        renderFloatingPanel();
+      }
+    }).catch(() => {});
+  };
+  pollFriendsRealtime();
+  setInterval(pollFriendsRealtime, 5000);
+
+  // Auto-check for updates on launch if Auto-Download Updates is enabled
+  if (config.settings?.autoDownloadUpdates !== false && emuApi?.updates?.check) {
+    setTimeout(() => {
+      emuApi.updates
+        .check()
+        .then((res: any) => {
+          if (res?.updateAvailable) {
+            openUpdateModal(res);
+          }
+        })
+        .catch(() => {});
+    }, 3500);
+  }
 
   // 8. Subscribe to state changes and render screens
   let lastFilter = store.get().consoleFilter;
@@ -300,8 +350,15 @@ function updateHeader(state: AppState) {
   }
 
   if (subtitleEl) {
-    const friendsCount = (state.settings.friends || []).length;
-    subtitleEl.textContent = friendsCount === 0 ? 'No friends online' : `${friendsCount} friends online`;
+    const friendsList = state.settings.friends || [];
+    const onlineCount = friendsList.filter((code) => !!state.friendStatuses?.present?.[code]).length;
+    if (friendsList.length === 0) {
+      subtitleEl.textContent = 'No friends online';
+    } else if (onlineCount > 0) {
+      subtitleEl.textContent = `${onlineCount} ${onlineCount === 1 ? 'friend' : 'friends'} online`;
+    } else {
+      subtitleEl.textContent = `0 of ${friendsList.length} friends online`;
+    }
   }
 
   // When inside a session (Create a Session or Play Online), remove the "< Library" button

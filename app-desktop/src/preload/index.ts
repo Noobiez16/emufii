@@ -18,6 +18,11 @@ export const api = {
     updateSettings: (partial: any) => ipcRenderer.invoke('config:updateSettings', partial),
     addFriend: (code: string, nickname?: string) => ipcRenderer.invoke('config:addFriend', code, nickname),
     removeFriend: (code: string) => ipcRenderer.invoke('config:removeFriend', code),
+    noteFriendMetadata: (
+      names: Record<string, string>,
+      avatars?: Record<string, string>,
+      hashes?: Record<string, string>
+    ) => ipcRenderer.invoke('config:noteFriendMetadata', names, avatars, hashes),
     renameRom: (id: string, title: string) => ipcRenderer.invoke('config:renameRom', id, title),
     toggleHideRom: (id: string) => ipcRenderer.invoke('config:toggleHideRom', id),
     restoreHiddenRoms: () => ipcRenderer.invoke('config:restoreHiddenRoms'),
@@ -72,6 +77,13 @@ export const api = {
       ipcRenderer.invoke('coordinator:uploadAvatar', id, key, imageBase64),
     deleteAvatar: (id: string, key: string) =>
       ipcRenderer.invoke('coordinator:deleteAvatar', id, key),
+    fetchAvatar: (id: string) => ipcRenderer.invoke('coordinator:fetchAvatar', id),
+    fetchMemberAvatar: (code: string, handle: string) =>
+      ipcRenderer.invoke('coordinator:fetchMemberAvatar', code, handle),
+    sendFriendRequest: (targetCode: string, fromCode: string, fromName: string) =>
+      ipcRenderer.invoke('coordinator:sendFriendRequest', targetCode, fromCode, fromName),
+    clearFriendRequestInbox: (myCode: string) =>
+      ipcRenderer.invoke('coordinator:clearFriendRequestInbox', myCode),
     reportJoinFailure: (reason: string, consoleType?: string | null, code?: string | null) =>
       ipcRenderer.invoke('coordinator:reportJoinFailure', reason, consoleType, code),
     reportEvent: (params: any) =>
@@ -84,8 +96,6 @@ export const api = {
   },
   emulators: {
     detectAll: () => ipcRenderer.invoke('emulators:detectAll'),
-    getSwitchKeyStatus: () => ipcRenderer.invoke('emulators:switchKeyStatus'),
-    provisionSwitchKeys: () => ipcRenderer.invoke('emulators:provisionSwitchKeys'),
     download: (consoleType: string) => ipcRenderer.invoke('emulators:download', consoleType),
     downloadAll: () => ipcRenderer.invoke('emulators:downloadAll'),
     isDownloaded: (consoleType: string) => ipcRenderer.invoke('emulators:isDownloaded', consoleType),
@@ -102,6 +112,15 @@ export const api = {
     killActiveGame: () => ipcRenderer.invoke('emulators:killActiveGame'),
     launchGame: (consoleType: string, options: any) =>
       ipcRenderer.invoke('emulators:launchGame', consoleType, options),
+  },
+  updates: {
+    check: () => ipcRenderer.invoke('app:checkForUpdates'),
+    perform: (info: any) => ipcRenderer.invoke('app:performUpdate', info),
+    onProgress: (callback: (data: { percent: number; status: string }) => void) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on('app:update-progress', listener);
+      return () => ipcRenderer.removeListener('app:update-progress', listener);
+    },
   },
   installer: {
     launchInstalledApp: () => ipcRenderer.invoke('installer:launchInstalledApp'),

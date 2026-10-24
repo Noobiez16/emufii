@@ -1,7 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
+import crypto from 'node:crypto';
 import { URL } from 'node:url';
 import { ClientAuth } from './clientAuth.js';
+import { deriveFriendInboxId, normalizeFriendCode } from '../profile/friendCode.js';
 
 export interface RoomRef {
   host: string;
@@ -254,8 +256,14 @@ export class CoordinatorClient {
     await this.request('/me', 'POST', body);
   }
 
-  async announceLastGame(id: string, title?: string | null, titleId?: string | null): Promise<void> {
+  async announceLastGame(
+    id: string,
+    title?: string | null,
+    titleId?: string | null,
+    name?: string | null
+  ): Promise<void> {
     const body: Record<string, any> = { id };
+    if (name) body.name = name;
     if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
     if (!title) {
       body.last_game = null;
@@ -272,10 +280,14 @@ export class CoordinatorClient {
     const res = await this.request('/friends', 'POST', { ids: codes });
     const json = JSON.parse(res);
     const present: Record<string, FriendPresence> = {};
+    const names: Record<string, string> = { ...(json.names || {}) };
     for (const f of json.friends || []) {
       const session = f.session || null;
+      if (f.name && !names[f.id]) {
+        names[f.id] = f.name;
+      }
       present[f.id] = {
-        name: f.name || null,
+        name: f.name || names[f.id] || null,
         sessionCode: session?.code || null,
         romTitle: session?.rom_title || null,
         romTitleId: session?.rom_title_id || null,
@@ -283,7 +295,6 @@ export class CoordinatorClient {
         ready: session?.ready || false,
       };
     }
-    const names = json.names || {};
     const avatars = json.avatars || {};
     const lastGames: Record<string, LastGame> = {};
     if (json.last_games) {
@@ -329,6 +340,77 @@ export class CoordinatorClient {
     await this.request('/avatar/delete', 'POST', { id, key }, 4000);
   }
 
+  async fetchAvatar(id: string): Promise<string | null> {
+    try {
+      const cleanId = normalizeFriendCode(id) || id.trim().toUpperCase();
+      const buf = await this.requestBytes(`/avatars/${cleanId}`, 'GET', 48 * 1024);
+      if (!buf || buf.length === 0) return null;
+      const mime =
+        buf[0] === 0x89 && buf[1] === 0x50
+          ? 'image/png'
+          : buf[0] === 0xff && buf[1] === 0xd8
+          ? 'image/jpeg'
+          : 'image/webp';
+      return `data:${mime};base64,${buf.toString('base64')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  async fetchMemberAvatar(code: string, handle: string): Promise<string | null> {
+    try {
+      const buf = await this.requestBytes(`/sessions/${code}/members/${handle}/avatar`, 'GET', 48 * 1024);
+      if (!buf || buf.length === 0) return null;
+      return `data:image/webp;base64,${buf.toString('base64')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  async sendFriendRequest(targetCode: string, fromCode: string, fromName: string): Promise<boolean> {
+    try {
+      const cleanTarget = normalizeFriendCode(targetCode);
+      const cleanFrom = normalizeFriendCode(fromCode);
+      if (!cleanTarget || !cleanFrom || cleanTarget === cleanFrom) return false;
+
+      const inboxId = deriveFriendInboxId(cleanTarget);
+      const inboxKey = crypto.createHash('sha256').update(`emufii-freq-key:${cleanTarget}`).digest('hex');
+
+      await this.request('/me', 'POST', {
+        id: inboxId,
+        key: inboxKey,
+        name: fromName || 'Player',
+        in_session: false,
+      });
+
+      await this.request('/me', 'POST', {
+        id: inboxId,
+        key: inboxKey,
+        last_game: {
+          title: fromName || 'Player',
+          title_id: cleanFrom,
+        },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async clearFriendRequestInbox(myCode: string): Promise<void> {
+    try {
+      const cleanMy = normalizeFriendCode(myCode);
+      if (!cleanMy) return;
+      const inboxId = deriveFriendInboxId(cleanMy);
+      const inboxKey = crypto.createHash('sha256').update(`emufii-freq-key:${cleanMy}`).digest('hex');
+      await this.request('/me', 'POST', {
+        id: inboxId,
+        key: inboxKey,
+        last_game: null,
+      });
+    } catch {}
+  }
+
   async reportJoinFailure(reason: string, consoleType?: string | null, code?: string | null): Promise<void> {
     try {
       await this.request('/telemetry/join', 'POST', {
@@ -357,6 +439,58 @@ export class CoordinatorClient {
         ...(params.emu ? { emu: params.emu } : {}),
       });
     } catch {}
+  }
+
+  private async requestBytes(
+    path: string,
+    method: string,
+    maxBytes = 48 * 1024,
+    timeoutMs = 6000
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.baseUrl + path);
+      const isHttps = url.protocol === 'https:';
+      const transport = isHttps ? https : http;
+
+      const headers: Record<string, string> = {
+        'User-Agent': 'Emufii-Desktop/2.0.3',
+      };
+      const sig = ClientAuth.sign(method, path, null);
+      if (sig) {
+        headers[ClientAuth.HEADER_AUTH] = sig.value;
+        headers[ClientAuth.HEADER_TIMESTAMP] = sig.timestamp;
+        headers[ClientAuth.HEADER_CLIENT] = ClientAuth.clientVersion;
+      }
+
+      const req = transport.request(
+        url,
+        { method, headers, timeout: timeoutMs },
+        (res) => {
+          const status = res.statusCode || 0;
+          if (status < 200 || status >= 300) {
+            res.resume();
+            return reject(new CoordinatorError(`HTTP ${status}`, status));
+          }
+          const chunks: Buffer[] = [];
+          let total = 0;
+          res.on('data', (chunk: Buffer) => {
+            total += chunk.length;
+            if (total > maxBytes) {
+              req.destroy();
+              return reject(new CoordinatorError('Response exceeded maxBytes'));
+            }
+            chunks.push(chunk);
+          });
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+        }
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new CoordinatorError('Request timeout'));
+      });
+      req.on('error', (err) => reject(new CoordinatorError(err.message)));
+      req.end();
+    });
   }
 
   private async request(

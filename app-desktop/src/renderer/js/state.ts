@@ -1,5 +1,6 @@
 import type { RomItem } from '../../main/library/scanner.js';
-import type { RemoteSession, WgTunnelInfo } from '../../main/network/coordinator.js';
+import type { RemoteSession, WgTunnelInfo, FriendsReply } from '../../main/network/coordinator.js';
+import type { FriendRequestItem } from '../../main/library/storage.js';
 
 export type ScreenType = 'splash' | 'library' | 'join' | 'session' | 'friends' | 'finder' | 'settings';
 
@@ -12,6 +13,7 @@ export interface AppState {
     id: string;
     name: string;
     avatarDataUrl?: string | null;
+    ownerKey?: string;
   };
   settings: {
     romDirectories: string[];
@@ -28,13 +30,21 @@ export interface AppState {
     customTitles: Record<string, string>;
     friends: string[];
     friendNicknames: Record<string, string>;
+    friendNames?: Record<string, string>;
+    friendAvatars?: Record<string, string>;
+    friendAvatarHashes?: Record<string, string>;
+    pendingFriendRequests?: FriendRequestItem[];
     steamGridDbKey?: string;
     language: 'system' | 'en' | 'es' | 'fr';
     hiddenConsoles: string[];
     hideIncompatible: boolean;
     notifyFriends: boolean;
     shareLastGame: boolean;
+    autoDownloadUpdates: boolean;
   };
+
+  // Real-time Friend Statuses
+  friendStatuses: FriendsReply;
 
   // Library
   roms: RomItem[];
@@ -85,13 +95,19 @@ class StateStore {
       customTitles: {},
       friends: [],
       friendNicknames: {},
+      friendNames: {},
+      friendAvatars: {},
+      friendAvatarHashes: {},
+      pendingFriendRequests: [],
       steamGridDbKey: '',
       language: 'system',
       hiddenConsoles: [],
       hideIncompatible: false,
       notifyFriends: true,
       shareLastGame: true,
+      autoDownloadUpdates: true,
     },
+    friendStatuses: { present: {}, names: {}, avatars: {}, lastGames: {} },
     roms: [],
     consoleFilter: 'ALL',
     searchQuery: '',
