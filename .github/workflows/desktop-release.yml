@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v2.0.3-desktop)'
+        description: 'Release version tag (e.g. v2.0.4-desktop)'
         required: false
-        default: 'v2.0.3-desktop'
+        default: 'v2.0.4-desktop'
   release:
     types: [published]
   push:
