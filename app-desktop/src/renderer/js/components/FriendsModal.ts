@@ -91,7 +91,7 @@ function renderFriendsContent(dialog: HTMLDialogElement) {
         <div style="background: var(--plate-bg-low); border: 1px solid var(--plate-border); border-radius: var(--radius-card); padding: 14px 16px;">
           <label class="cloud-section-label" style="margin-bottom: 8px;">Add a Friend</label>
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="inputModalFriendCode" class="cloud-input" placeholder="Type code XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase;">
+            <input type="text" id="inputModalFriendCode" class="cloud-input" placeholder="XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase;">
             <input type="text" id="inputModalFriendNick" class="cloud-input" placeholder="Nickname (optional)" maxlength="24" style="max-width: 140px;">
             <button class="btn-primary plate-button" id="btnConfirmAddFriendModal" style="width: auto; height: 38px; padding: 0 18px; font-size: 12px;">
               Add

@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { URL } from 'node:url';
 import { ClientAuth } from './clientAuth.js';
 import { deriveFriendInboxId, normalizeFriendCode } from '../profile/friendCode.js';
@@ -77,6 +78,33 @@ export interface FriendsReply {
   names: Record<string, string>;
   avatars: Record<string, string>;
   lastGames: Record<string, LastGame>;
+}
+
+export interface FriendRequestItem {
+  from: string;
+  name: string;
+  at: number;
+}
+
+export interface FriendAcceptedItem {
+  id: string;
+  name: string;
+  at: number;
+}
+
+export interface SessionInviteItem {
+  from: string;
+  name: string;
+  code: string;
+  romTitle: string | null;
+  romTitleId: string | null;
+  at: number;
+}
+
+export interface FriendInbox {
+  requests: FriendRequestItem[];
+  accepted: FriendAcceptedItem[];
+  invites: SessionInviteItem[];
 }
 
 export interface WgTunnelInfo {
@@ -367,30 +395,162 @@ export class CoordinatorClient {
     }
   }
 
-  async sendFriendRequest(targetCode: string, fromCode: string, fromName: string): Promise<boolean> {
+  async sendFriendRequest(
+    targetCode: string,
+    fromCode: string,
+    fromName: string
+  ): Promise<{ ok: boolean; status: string }> {
     try {
       const cleanTarget = normalizeFriendCode(targetCode);
       const cleanFrom = normalizeFriendCode(fromCode);
-      if (!cleanTarget || !cleanFrom || cleanTarget === cleanFrom) return false;
+      if (!cleanTarget || !cleanFrom || cleanTarget === cleanFrom) {
+        return { ok: false, status: 'invalid' };
+      }
 
-      const inboxId = deriveFriendInboxId(cleanTarget);
-      const inboxKey = crypto.createHash('sha256').update(`emufii-freq-key:${cleanTarget}`).digest('hex');
-
-      await this.request('/me', 'POST', {
-        id: inboxId,
-        key: inboxKey,
+      // 1. Official v2.0.4 /friends/request endpoint
+      const body: Record<string, any> = {
+        from: cleanFrom,
+        to: cleanTarget,
         name: fromName || 'Player',
-        in_session: false,
-      });
+      };
+      if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
+      const res = await this.request('/friends/request', 'POST', body);
+      let status = 'sent';
+      try {
+        const json = JSON.parse(res);
+        if (json?.status) status = json.status;
+      } catch {}
 
-      await this.request('/me', 'POST', {
-        id: inboxId,
-        key: inboxKey,
-        last_game: {
-          title: fromName || 'Player',
-          title_id: cleanFrom,
-        },
-      });
+      // 2. Also post to legacy inbox ID so v2.0.3 peers receive it too
+      try {
+        const inboxId = deriveFriendInboxId(cleanTarget);
+        const inboxKey = crypto.createHash('sha256').update(`emufii-freq-key:${cleanTarget}`).digest('hex');
+        await this.request('/me', 'POST', {
+          id: inboxId,
+          key: inboxKey,
+          name: fromName || 'Player',
+          in_session: false,
+          last_game: {
+            title: fromName || 'Player',
+            title_id: cleanFrom,
+          },
+        });
+      } catch {}
+
+      return { ok: true, status };
+    } catch {
+      return { ok: false, status: 'error' };
+    }
+  }
+
+  async fetchFriendInbox(myCode: string): Promise<FriendInbox> {
+    const cleanId = normalizeFriendCode(myCode);
+    if (!cleanId) {
+      return { requests: [], accepted: [], invites: [] };
+    }
+    try {
+      const body: Record<string, any> = { id: cleanId };
+      if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
+      const res = await this.request('/friends/inbox', 'POST', body);
+      const json = JSON.parse(res);
+
+      const requests: FriendRequestItem[] = (json.requests || [])
+        .map((r: any) => ({
+          from: r.from || r.code || '',
+          name: r.name || 'Player',
+          at: r.at || Date.now(),
+        }))
+        .filter((r: FriendRequestItem) => !!r.from);
+
+      const accepted: FriendAcceptedItem[] = (json.accepted || [])
+        .map((a: any) => ({
+          id: a.id || a.from || a.code || '',
+          name: a.name || 'Player',
+          at: a.at || Date.now(),
+        }))
+        .filter((a: FriendAcceptedItem) => !!a.id);
+
+      const invites: SessionInviteItem[] = (json.invites || [])
+        .map((inv: any) => ({
+          from: inv.from || '',
+          name: inv.name || 'Player',
+          code: inv.code || '',
+          romTitle: inv.rom_title || inv.romTitle || null,
+          romTitleId: inv.rom_title_id || inv.romTitleId || null,
+          at: inv.at || Date.now(),
+        }))
+        .filter((inv: SessionInviteItem) => !!inv.from && !!inv.code);
+
+      return { requests, accepted, invites };
+    } catch {
+      return { requests: [], accepted: [], invites: [] };
+    }
+  }
+
+  async answerFriendRequest(
+    myCode: string,
+    fromCode: string,
+    accept: boolean,
+    myName: string
+  ): Promise<boolean> {
+    const cleanId = normalizeFriendCode(myCode);
+    const cleanFrom = normalizeFriendCode(fromCode);
+    if (!cleanId || !cleanFrom) return false;
+    try {
+      const body: Record<string, any> = {
+        id: cleanId,
+        from: cleanFrom,
+        accept: !!accept,
+        name: myName || 'Player',
+      };
+      if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
+      await this.request('/friends/answer', 'POST', body);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async sendSessionInvite(
+    fromCode: string,
+    toCode: string,
+    sessionCode: string,
+    fromName: string
+  ): Promise<boolean> {
+    const cleanFrom = normalizeFriendCode(fromCode);
+    const cleanTo = normalizeFriendCode(toCode);
+    if (!cleanFrom || !cleanTo || !sessionCode) return false;
+    try {
+      const body: Record<string, any> = {
+        from: cleanFrom,
+        to: cleanTo,
+        code: sessionCode.trim().toUpperCase(),
+        name: fromName || 'Player',
+      };
+      if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
+      await this.request('/friends/invite', 'POST', body);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async dismissSessionInvite(
+    myCode: string,
+    fromCode: string,
+    sessionCode: string
+  ): Promise<boolean> {
+    const cleanId = normalizeFriendCode(myCode);
+    const cleanFrom = normalizeFriendCode(fromCode);
+    if (!cleanId || !cleanFrom || !sessionCode) return false;
+    try {
+      const body: Record<string, any> = {
+        id: cleanId,
+        from: cleanFrom,
+        code: sessionCode.trim().toUpperCase(),
+      };
+      if (CoordinatorClient.identityKey) body.key = CoordinatorClient.identityKey;
+      await this.request('/friends/invite/dismiss', 'POST', body);
       return true;
     } catch {
       return false;
@@ -409,6 +569,59 @@ export class CoordinatorClient {
         last_game: null,
       });
     } catch {}
+  }
+
+  /**
+   * Measures round-trip latency (ms) to a host via OS ping (matching RelayRegions.kt).
+   */
+  async pingHost(host: string): Promise<number | null> {
+    if (!host) return null;
+    const cleanHost = host.split(':')[0].trim();
+    return new Promise((resolve) => {
+      const isWin = process.platform === 'win32';
+      const args = isWin
+        ? ['-n', '2', '-w', '1000', cleanHost]
+        : ['-c', '2', '-i', '0.2', '-W', '1', cleanHost];
+
+      execFile('ping', args, { timeout: 3000 }, (_err, stdout) => {
+        const text = String(stdout || '');
+        // Linux/macOS: rtt min/avg/max/mdev = 11.2/12.8/14.1/1.2 ms
+        const unixMatch = text.match(/= [\d.]+\/([\d.]+)\//);
+        if (unixMatch && unixMatch[1]) {
+          return resolve(Math.round(parseFloat(unixMatch[1])));
+        }
+        // Windows: Average = 24ms / Media = 24ms
+        const winAvg = text.match(/(?:Average|Media|Moyenne)\s*=\s*(\d+)\s*ms/i);
+        if (winAvg && winAvg[1]) {
+          return resolve(parseInt(winAvg[1], 10));
+        }
+        const singleTime = text.match(/time[=<]\s*([\d.]+)\s*ms/i);
+        if (singleTime && singleTime[1]) {
+          return resolve(Math.round(parseFloat(singleTime[1])));
+        }
+        resolve(null);
+      });
+    });
+  }
+
+  /**
+   * Lists all relay regions from `/relays` and measures live RTT to each (matching RelayRegions.kt).
+   */
+  async measureRelays(): Promise<{ id: string; name: string; pingHost: string; rttMs: number | null }[]> {
+    try {
+      const relays = await this.listRelays();
+      const measured = await Promise.all(
+        relays.map(async (r) => ({
+          id: r.id,
+          name: r.name,
+          pingHost: r.pingHost,
+          rttMs: await this.pingHost(r.pingHost),
+        }))
+      );
+      return measured;
+    } catch {
+      return [];
+    }
   }
 
   async reportJoinFailure(reason: string, consoleType?: string | null, code?: string | null): Promise<void> {
@@ -453,7 +666,7 @@ export class CoordinatorClient {
       const transport = isHttps ? https : http;
 
       const headers: Record<string, string> = {
-        'User-Agent': 'Emufii-Desktop/2.0.3',
+        'User-Agent': 'Emufii-Desktop/2.0.4',
       };
       const sig = ClientAuth.sign(method, path, null);
       if (sig) {
@@ -525,7 +738,7 @@ export class CoordinatorClient {
       const transport = isHttps ? https : http;
 
       const headers: Record<string, string> = {
-        'User-Agent': 'Emufii-Desktop/2.0.3',
+        'User-Agent': 'Emufii-Desktop/2.0.4',
       };
       if (payload != null) {
         headers['Content-Type'] = 'application/json; charset=utf-8';

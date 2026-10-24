@@ -1,11 +1,181 @@
 import { store } from '../state.js';
 import { sfx } from '../sfx.js';
 import { ensureEmulator } from '../components/EmulatorDownloadModal.js';
+import {
+  resolveFriendDisplayName,
+  resolveFriendAvatar,
+  resolveFriendActivity,
+} from '../components/FriendActionModal.js';
+import { toggleFloatingPanel } from '../components/FloatingPanel.js';
+import { formatFriendCode } from '../../../main/profile/friendCode.js';
 import type { RemoteSession } from '../../../main/network/coordinator.js';
+
+const invitedInSession = new Set<string>();
+
+function openInviteFriendsModal(sessionCode: string) {
+  const emuApi = (window as any).emufii;
+  const state = store.get();
+  const friends = state.settings.friends || [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-backdrop visible';
+  overlay.style.cssText = `
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 6, 14, 0.72);
+    backdrop-filter: blur(10px);
+    animation: fadeIn 160ms ease-out;
+  `;
+
+  overlay.innerHTML = `
+    <div class="plate modal-window" role="dialog" aria-modal="true" aria-labelledby="inviteFriendsModalTitle" style="width: 440px; max-width: calc(100vw - 32px); padding: 24px; border-radius: 24px; display: flex; flex-direction: column; gap: 14px; border: 1px solid var(--plate-border); box-shadow: 0 24px 48px rgba(0, 0, 0, 0.55);">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+          <h3 id="inviteFriendsModalTitle" style="margin: 0 0 2px 0; font-size: 18px; font-weight: 800; color: var(--ink-primary);">
+            Invite Friends to Room ${sessionCode}
+          </h3>
+          <p style="margin: 0; font-size: 12px; color: var(--ink-secondary);">
+            Send a direct room invite to your friends
+          </p>
+        </div>
+        <button class="cloud-close-btn plate-button" id="btnCloseInviteModal" title="Close">&times;</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+        ${
+          friends.length === 0
+            ? `
+          <div style="padding: 24px 12px; text-align: center; color: var(--ink-secondary); font-size: 13px;">
+            You have not added any friends yet.
+          </div>
+        `
+            : friends
+                .map((code) => {
+                  const name = resolveFriendDisplayName(code);
+                  const avatar = resolveFriendAvatar(code);
+                  const activity = resolveFriendActivity(code);
+                  const inviteKey = `${sessionCode}:${code}`;
+                  const alreadySent = invitedInSession.has(inviteKey);
+
+                  return `
+            <div class="plate" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: var(--radius-sm);">
+              <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                <div style="position: relative; flex-shrink: 0;">
+                  <div style="width: 34px; height: 34px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1.5px solid var(--plate-border); overflow: hidden;">
+                    ${
+                      avatar
+                        ? `<img src="${avatar}" alt="${name}" style="width: 100%; height: 100%; object-fit: cover;">`
+                        : name.slice(0, 2).toUpperCase()
+                    }
+                  </div>
+                  <div style="position: absolute; bottom: -1px; right: -1px; width: 9px; height: 9px; border-radius: 50%; background: ${
+                    activity.isOnline ? 'var(--compat-perfect)' : 'var(--ink-tertiary)'
+                  }; border: 1.5px solid var(--plate-bg);"></div>
+                </div>
+                <div style="min-width: 0; flex: 1;">
+                  <div style="font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+                  <div style="font-size: 11px; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    ${activity.statusText || formatFriendCode(code)}
+                  </div>
+                </div>
+              </div>
+              <button class="${alreadySent ? 'btn-secondary' : 'btn-primary'} plate-button btn-send-session-invite" data-code="${code}" ${alreadySent ? 'disabled' : ''} style="height: 28px; padding: 0 12px; font-size: 11px; width: auto; border-radius: 9999px;">
+                ${alreadySent ? '✓ Sent' : 'Invite'}
+              </button>
+            </div>
+          `;
+                })
+                .join('')
+        }
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+        ${
+          friends.length === 0
+            ? `<button class="btn-primary plate-button" id="btnOpenFriendsFromInvite" style="height: 36px; padding: 0 16px; font-size: 12px; border-radius: 9999px; width: auto;">Add Friends</button>`
+            : ''
+        }
+        <button class="btn-secondary plate-button" id="btnDoneInviteModal" style="height: 36px; padding: 0 18px; font-size: 12px; border-radius: 9999px;">
+          Done
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const cleanup = () => {
+    window.removeEventListener('keydown', onKeyDown, true);
+    overlay.remove();
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      sfx.play('click');
+      cleanup();
+    }
+  };
+  window.addEventListener('keydown', onKeyDown, true);
+
+  overlay.querySelector('#btnCloseInviteModal')?.addEventListener('click', () => {
+    sfx.play('click');
+    cleanup();
+  });
+  overlay.querySelector('#btnDoneInviteModal')?.addEventListener('click', () => {
+    sfx.play('click');
+    cleanup();
+  });
+  overlay.querySelector('#btnOpenFriendsFromInvite')?.addEventListener('click', () => {
+    sfx.play('click');
+    cleanup();
+    toggleFloatingPanel('friends');
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      sfx.play('click');
+      cleanup();
+    }
+  });
+
+  overlay.querySelectorAll('.btn-send-session-invite').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const button = e.currentTarget as HTMLButtonElement;
+      const toCode = button.dataset.code;
+      if (!toCode) return;
+
+      button.disabled = true;
+      button.textContent = 'Sending...';
+      sfx.play('confirm');
+
+      const ok = await emuApi.coordinator?.sendSessionInvite?.(
+        state.profile.id,
+        toCode,
+        sessionCode,
+        state.profile.name || 'Joueur'
+      );
+
+      if (ok !== false) {
+        invitedInSession.add(`${sessionCode}:${toCode}`);
+        button.textContent = '✓ Sent';
+        button.className = 'btn-secondary plate-button btn-send-session-invite';
+      } else {
+        button.disabled = false;
+        button.textContent = 'Retry';
+      }
+    });
+  });
+}
 
 export function renderSessionScreen(container: HTMLElement) {
   const emuApi = (window as any).emufii;
   let pollTimer: any = null;
+  let currentPingMs: number | null = null;
 
   const update = () => {
     const session = store.get().activeSession;
@@ -44,9 +214,14 @@ export function renderSessionScreen(container: HTMLElement) {
             </div>
             <div class="code-value" style="${isOnline ? 'font-size: 32px; letter-spacing: 2px;' : ''}">${session.code}</div>
             ${!isOnline ? `
-            <button class="btn-secondary plate-button" id="btnCopyCode" style="height: 36px; padding: 0 18px; font-size: 13px; border-radius: 9999px;">
-              Copy Code
-            </button>
+            <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+              <button class="btn-secondary plate-button" id="btnCopyCode" style="height: 36px; padding: 0 16px; font-size: 12px; border-radius: 9999px;">
+                Copy Code
+              </button>
+              <button class="btn-primary plate-button" id="btnInviteFriendsSession" style="height: 36px; padding: 0 16px; font-size: 12px; border-radius: 9999px; width: auto;">
+                Invite Friends
+              </button>
+            </div>
             ` : `
             <div style="font-size: 12px; color: var(--ink-secondary);">Direct connection to multiplayer servers</div>
             `}
@@ -65,6 +240,20 @@ export function renderSessionScreen(container: HTMLElement) {
               <button class="btn-secondary plate-button" style="height: 28px; padding: 0 12px; font-size: 11px; border-radius: 9999px;" id="btnCopyPort">Copy</button>
             </div>
             ` : ''}
+            ${!isOnline ? `
+            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--plate-bg-low); padding: 10px 14px; border-radius: 18px; font-family: var(--font-family); font-size: 14px;">
+              <span>Ping: <strong id="sessionLivePingValue">${currentPingMs !== null ? `${currentPingMs} ms` : 'Measuring...'}</strong></span>
+              <span id="sessionLivePingDot" style="width: 10px; height: 10px; border-radius: 50%; background: ${
+                currentPingMs === null
+                  ? 'var(--ink-tertiary)'
+                  : currentPingMs < 60
+                  ? '#10b981'
+                  : currentPingMs < 130
+                  ? '#f59e0b'
+                  : '#ef4444'
+              };"></span>
+            </div>
+            ` : ''}
           </div>
 
           <!-- Players Card -->
@@ -76,12 +265,12 @@ export function renderSessionScreen(container: HTMLElement) {
             <div class="member-list" id="sessionMemberList">
               ${(remote?.members || [{ id: store.get().profile.id, name: store.get().profile.name, forSeconds: 0 }])
                 .map(
-                  (m) => `
+                  (m: any) => `
                 <div class="member-row" style="border-radius: 18px;">
                   <div class="chip-avatar">${m.name.slice(0, 2).toUpperCase()}</div>
                   <div style="flex: 1;">
                     <div style="font-size: 14px;">${m.name}</div>
-                    <div style="font-size: 11px; color: var(--ink-secondary);">${m.forSeconds ? Math.floor(m.forSeconds / 60) + 'm in room' : 'Connected'}</div>
+                    <div style="font-size: 11px; color: var(--ink-secondary);">${m.forSeconds ? Math.floor(m.forSeconds / 60) + 'm in room' : 'Connected'}${typeof m.rttMs === 'number' ? ` · ${m.rttMs} ms` : ''}</div>
                   </div>
                 </div>
               `
@@ -176,6 +365,11 @@ export function renderSessionScreen(container: HTMLElement) {
     container.querySelector('#btnCopyCode')?.addEventListener('click', () => {
       navigator.clipboard.writeText(session.code);
       sfx.play('click');
+    });
+
+    container.querySelector('#btnInviteFriendsSession')?.addEventListener('click', () => {
+      sfx.play('click');
+      openInviteFriendsModal(session.code);
     });
 
     container.querySelector('#btnCopyIp')?.addEventListener('click', () => {
@@ -294,12 +488,32 @@ export function renderSessionScreen(container: HTMLElement) {
     }
   });
 
-  // Polling loop for session heartbeats and members
+  // Polling loop for session heartbeats, live RTT ping, and members
   const poll = async () => {
     const session = store.get().activeSession;
     if (!session || session.code === 'ONLINE') return;
     try {
-      await emuApi.coordinator.heartbeat(session.code, store.get().profile.id, store.get().profile.name);
+      const endpointHost = (session.wireguard?.relayEndpoint || '').split(':')[0] || 'coord.emufii.xyz';
+      if (emuApi.coordinator.pingHost) {
+        const measured = await emuApi.coordinator.pingHost(endpointHost);
+        if (typeof measured === 'number') {
+          currentPingMs = measured;
+          const pingEl = container.querySelector('#sessionLivePingValue');
+          const dotEl = container.querySelector('#sessionLivePingDot') as HTMLElement | null;
+          if (pingEl) pingEl.textContent = `${measured} ms`;
+          if (dotEl) {
+            dotEl.style.background =
+              measured < 60 ? '#10b981' : measured < 130 ? '#f59e0b' : '#ef4444';
+          }
+        }
+      }
+
+      await emuApi.coordinator.heartbeat(
+        session.code,
+        store.get().profile.id,
+        store.get().profile.name,
+        currentPingMs ?? undefined
+      );
       const remote = await emuApi.coordinator.getSession(session.code);
       const current = store.get().activeSession;
       if (current && current.code === session.code) {
@@ -308,6 +522,7 @@ export function renderSessionScreen(container: HTMLElement) {
     } catch {}
   };
 
+  poll();
   pollTimer = setInterval(poll, 4000);
   return () => {
     clearInterval(pollTimer);

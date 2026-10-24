@@ -82,12 +82,29 @@ export const api = {
       ipcRenderer.invoke('coordinator:fetchMemberAvatar', code, handle),
     sendFriendRequest: (targetCode: string, fromCode: string, fromName: string) =>
       ipcRenderer.invoke('coordinator:sendFriendRequest', targetCode, fromCode, fromName),
+    fetchFriendInbox: (myCode: string) =>
+      ipcRenderer.invoke('coordinator:fetchFriendInbox', myCode),
+    answerFriendRequest: (myCode: string, fromCode: string, accept: boolean, myName?: string) =>
+      ipcRenderer.invoke('coordinator:answerFriendRequest', myCode, fromCode, accept, myName),
+    sendSessionInvite: (fromCode: string, toCode: string, sessionCode: string, fromName: string) =>
+      ipcRenderer.invoke('coordinator:sendSessionInvite', fromCode, toCode, sessionCode, fromName),
+    dismissSessionInvite: (myCode: string, fromCode: string, sessionCode: string) =>
+      ipcRenderer.invoke('coordinator:dismissSessionInvite', myCode, fromCode, sessionCode),
     clearFriendRequestInbox: (myCode: string) =>
       ipcRenderer.invoke('coordinator:clearFriendRequestInbox', myCode),
+    pingHost: (host: string) =>
+      ipcRenderer.invoke('coordinator:pingHost', host),
+    measureRelays: () =>
+      ipcRenderer.invoke('coordinator:measureRelays'),
     reportJoinFailure: (reason: string, consoleType?: string | null, code?: string | null) =>
       ipcRenderer.invoke('coordinator:reportJoinFailure', reason, consoleType, code),
     reportEvent: (params: any) =>
       ipcRenderer.invoke('coordinator:reportEvent', params),
+  },
+  crashLogs: {
+    list: () => ipcRenderer.invoke('crashLogs:list'),
+    clear: () => ipcRenderer.invoke('crashLogs:clear'),
+    openFolder: () => ipcRenderer.invoke('crashLogs:openFolder'),
   },
   wireguard: {
     up: (info: any, dns?: string | null) => ipcRenderer.invoke('wireguard:up', info, dns),

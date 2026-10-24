@@ -15,6 +15,8 @@ import {
   syncFriendsRealtime,
   acceptFriendRequest,
   declineFriendRequest,
+  acceptSessionInvite,
+  dismissSessionInvite,
   encodeAvatarToWebpBase64,
 } from './FriendActionModal.js';
 
@@ -30,6 +32,8 @@ let loadingSessions = false;
 let sessionsLoaded = false;
 let currentPresence: 'online' | 'idle' | 'offline' = (localStorage.getItem('emufii_presence') as any) || 'online';
 let presenceMenuOpen = false;
+let relayLatencies: Record<string, number | null> = {};
+let measuringRelays = false;
 
 export function isFloatingPanelOpen(): boolean {
   return isOpen;
@@ -104,6 +108,11 @@ if (typeof window !== 'undefined') {
       positionFloatingPanel(currentTab);
     }
   });
+  window.addEventListener('emufii:friends-panel-refresh', () => {
+    if (isOpen && currentTab === 'friends') {
+      renderFloatingPanel();
+    }
+  });
 }
 
 export function toggleFloatingPanel(tab: FloatingTab) {
@@ -138,11 +147,16 @@ export function openFloatingPanel(tab: FloatingTab = 'sessions') {
     refreshSessions();
   }
   if (tab === 'friends') {
+    const existingToast = document.getElementById('emufiiFriendToast');
+    if (existingToast) existingToast.remove();
     syncFriendsRealtime(() => {
       if (isOpen && currentTab === 'friends') {
         renderFloatingPanel();
       }
     });
+  }
+  if (tab === 'server') {
+    refreshRelayLatencies();
   }
 
   // Show panel with smooth arrive animation
@@ -387,16 +401,106 @@ function renderSignalBars(rtt: number | null): string {
   return `<div class="server-signal-bars" title="${rtt !== null ? `${Math.round(rtt)} ms` : 'Latency'}">${barsHtml}</div>`;
 }
 
+const REGION_META: Record<string, { title: string; badge: string }> = {
+  eu: { title: 'Europe', badge: '🇪🇺' },
+  na: { title: 'Canada (Montréal)', badge: '🇨🇦' },
+  usw: { title: 'US West (Seattle)', badge: '🇺🇸' },
+  jp: { title: 'Japan (Tokyo)', badge: '🇯🇵' },
+  use: { title: 'US East (NY)', badge: '🇺🇸' },
+};
+
+function getBestAutoRegion(): { code: string; title: string; rtt: number | null } {
+  let bestCode = 'use';
+  let bestRtt: number | null = null;
+  for (const [code, rtt] of Object.entries(relayLatencies)) {
+    if (typeof rtt === 'number' && rtt >= 0 && (bestRtt === null || rtt < bestRtt)) {
+      bestCode = code;
+      bestRtt = rtt;
+    }
+  }
+  return {
+    code: bestCode,
+    title: REGION_META[bestCode]?.title || 'US East (NY)',
+    rtt: bestRtt,
+  };
+}
+
+export function updateHeaderVpsLabel() {
+  const currentRegion = localStorage.getItem('emufii_server_region') || 'auto';
+  const vpsText = document.getElementById('vpsText');
+  if (!vpsText) return;
+
+  if (currentRegion === 'auto') {
+    const best = getBestAutoRegion();
+    vpsText.innerHTML =
+      best.rtt !== null
+        ? `Online &bull; ${best.title} (${best.rtt} ms)`
+        : `Online &bull; ${best.title}`;
+  } else {
+    const title = REGION_META[currentRegion]?.title || 'US East (NY)';
+    const rtt = relayLatencies[currentRegion] ?? null;
+    vpsText.innerHTML = rtt !== null ? `Online &bull; ${title} (${rtt} ms)` : `Online &bull; ${title}`;
+  }
+}
+
+export async function refreshRelayLatencies() {
+  if (measuringRelays) return;
+  const emuApi = (window as any).emufii;
+  if (!emuApi?.coordinator?.measureRelays) return;
+
+  measuringRelays = true;
+  if (isOpen && currentTab === 'server') {
+    renderFloatingPanel();
+  }
+
+  try {
+    const measured: Record<string, { host: string; rttMs: number | null }> =
+      await emuApi.coordinator.measureRelays();
+    if (measured && typeof measured === 'object') {
+      const next: Record<string, number | null> = {};
+      for (const [code, info] of Object.entries(measured)) {
+        next[code] = typeof info?.rttMs === 'number' ? info.rttMs : null;
+      }
+      relayLatencies = next;
+    }
+  } catch {
+    // Keep previous measurements if offline
+  } finally {
+    measuringRelays = false;
+    updateHeaderVpsLabel();
+    if (isOpen && currentTab === 'server') {
+      renderFloatingPanel();
+    }
+  }
+}
+
 function renderServerTab(): string {
   const currentRegion = localStorage.getItem('emufii_server_region') || 'auto';
+  const bestAuto = getBestAutoRegion();
+  const autoDetail =
+    bestAuto.rtt !== null
+      ? `Now: ${bestAuto.title} (${bestAuto.rtt} ms)`
+      : measuringRelays
+      ? 'Measuring closest relay...'
+      : `Now: ${bestAuto.title}`;
 
+  const regionOrder = ['eu', 'na', 'usw', 'jp', 'use'];
   const servers = [
-    { id: 'auto', title: 'Automatic', badge: '🌐', rtt: null, detail: 'Now: US East (NY)', isAuto: true },
-    { id: 'eu', title: 'Europe', badge: '🇪🇺', rtt: 162, detail: '162 ms', isAuto: false },
-    { id: 'na', title: 'Canada (Montréal)', badge: '🇨🇦', rtt: 76, detail: '76 ms', isAuto: false },
-    { id: 'usw', title: 'US West (Seattle)', badge: '🇺🇸', rtt: 127, detail: '127 ms', isAuto: false },
-    { id: 'jp', title: 'Japan (Tokyo)', badge: '🇯🇵', rtt: 219, detail: '219 ms', isAuto: false },
-    { id: 'use', title: 'US East (NY)', badge: '🇺🇸', rtt: 68, detail: '68 ms', isAuto: false },
+    { id: 'auto', title: 'Automatic', badge: '🌐', rtt: bestAuto.rtt, detail: autoDetail, isAuto: true },
+    ...regionOrder.map((code) => {
+      const meta = REGION_META[code];
+      const rtt = relayLatencies[code] ?? null;
+      const detail =
+        rtt !== null ? `${Math.round(rtt)} ms` : measuringRelays ? 'Pinging...' : 'Ready';
+      return {
+        id: code,
+        title: meta.title,
+        badge: meta.badge,
+        rtt,
+        detail,
+        isAuto: false,
+      };
+    }),
   ];
 
   const renderCard = (opt: any) => {
@@ -435,21 +539,7 @@ function attachServerListeners(panel: HTMLElement) {
       const regionId = row.dataset.region || 'auto';
       sfx.play('click');
       localStorage.setItem('emufii_server_region', regionId);
-
-      const regionNames: Record<string, string> = {
-        auto: 'US East (NY)',
-        use: 'US East (NY)',
-        usw: 'US West (Seattle)',
-        eu: 'Europe',
-        na: 'Canada (Montréal)',
-        jp: 'Japan (Tokyo)',
-      };
-      const label = regionNames[regionId] || 'US East (NY)';
-      const vpsText = document.getElementById('vpsText');
-      if (vpsText) {
-        vpsText.innerHTML = `Online &bull; ${label}`;
-      }
-
+      updateHeaderVpsLabel();
       closeFloatingPanel();
     });
   });
@@ -737,14 +827,40 @@ function renderFriendsTab(): string {
   const state = store.get();
   const friends = state.settings.friends || [];
   const pendingRequests = state.settings.pendingFriendRequests || [];
+  const pendingInvites = state.settings.pendingSessionInvites || [];
+  const inPanelNotice = state.inPanelFriendNotice || null;
 
   return `
     <div class="floating-tab-pane">
+      ${
+        inPanelNotice
+          ? `
+        <!-- In-Panel Live Notification Banner (shown inside Friends panel when open) -->
+        <div class="plate" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border-radius: var(--radius-sm); border: 1px solid var(--accent-bright); background: var(--accent-subtle);">
+          <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+            <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1px solid var(--plate-border); overflow: hidden; flex-shrink: 0;">
+              ${
+                inPanelNotice.avatarUrl
+                  ? `<img src="${inPanelNotice.avatarUrl}" alt="${inPanelNotice.name}" style="width: 100%; height: 100%; object-fit: cover;">`
+                  : (inPanelNotice.name || 'F').slice(0, 2).toUpperCase()
+              }
+            </div>
+            <div style="min-width: 0; flex: 1;">
+              <div style="font-weight: 800; font-size: 12px; color: var(--ink-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${inPanelNotice.name}</div>
+              <div style="font-size: 11px; color: var(--ink-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${inPanelNotice.subtitle}</div>
+            </div>
+          </div>
+          <button id="btnDismissInPanelNotice" style="background: transparent; border: none; color: var(--ink-secondary); cursor: pointer; font-size: 15px; line-height: 1; padding: 4px;" title="Dismiss">&times;</button>
+        </div>
+      `
+          : ''
+      }
+
       <!-- Add Friend Box -->
       <div style="background: var(--plate-bg-low); border: 1px solid var(--plate-border); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 14px;">
         <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--ink-secondary); margin-bottom: 8px;">Add a Friend</div>
         <div style="display: flex; gap: 8px;">
-          <input type="text" id="inputFloatingFriendCode" class="cloud-input" placeholder="Type code XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; height: 36px; font-size: 13px; flex: 1;">
+          <input type="text" id="inputFloatingFriendCode" class="cloud-input" placeholder="XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="font-family: var(--font-family); font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; height: 36px; font-size: 13px; flex: 1;">
           <button class="btn-primary plate-button" id="btnFloatingAddFriend" style="width: auto; height: 36px; padding: 0 18px; font-size: 12px;">
             Add
           </button>
@@ -753,6 +869,54 @@ function renderFriendsTab(): string {
           Invalid Crockford friend code or checksum.
         </div>
       </div>
+
+      ${
+        pendingInvites.length > 0
+          ? `
+        <!-- Incoming Session Invites -->
+        <div style="margin-bottom: 14px;">
+          <div style="margin-bottom: 6px;">
+            <label class="cloud-section-label" style="color: var(--accent-bright);">Session Invites (${pendingInvites.length})</label>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            ${pendingInvites
+              .map((inv) => {
+                const invAvatar = resolveFriendAvatar(inv.from);
+                const invName = inv.name || resolveFriendDisplayName(inv.from);
+                return `
+                  <div class="plate" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: var(--radius-sm); border-color: var(--accent-bright);">
+                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                      <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--bg-shelf); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: var(--accent-bright); border: 1px solid var(--plate-border); overflow: hidden; flex-shrink: 0;">
+                        ${
+                          invAvatar
+                            ? `<img src="${invAvatar}" alt="${invName}" style="width: 100%; height: 100%; object-fit: cover;">`
+                            : invName.slice(0, 2).toUpperCase()
+                        }
+                      </div>
+                      <div style="min-width: 0; flex: 1;">
+                        <div style="font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${invName}</div>
+                        <div style="font-size: 11px; color: var(--accent-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                          Invited you to play ${inv.romTitle || inv.code} (${inv.code})
+                        </div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 4px; flex-shrink: 0; margin-left: 8px;">
+                      <button class="btn-primary plate-button btn-f-accept-invite" data-from="${inv.from}" data-code="${inv.code}" style="height: 26px; padding: 0 10px; font-size: 10px; width: auto;">
+                        Join
+                      </button>
+                      <button class="btn-secondary plate-button btn-f-dismiss-invite" data-from="${inv.from}" data-code="${inv.code}" style="height: 26px; padding: 0 8px; font-size: 10px;">
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                `;
+              })
+              .join('')}
+          </div>
+        </div>
+      `
+          : ''
+      }
 
       ${
         pendingRequests.length > 0
@@ -916,6 +1080,36 @@ function attachFriendsListeners(panel: HTMLElement) {
       e.preventDefault();
       submitAddFriend();
     }
+  });
+
+  panel.querySelector('#btnDismissInPanelNotice')?.addEventListener('click', () => {
+    sfx.play('click');
+    store.set({ inPanelFriendNotice: null });
+    renderFloatingPanel();
+  });
+
+  panel.querySelectorAll('.btn-f-accept-invite').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      sfx.play('confirm');
+      const target = e.currentTarget as HTMLElement;
+      const from = target.dataset.from;
+      const code = target.dataset.code;
+      if (!from || !code) return;
+      closeFloatingPanel();
+      await acceptSessionInvite({ from, code });
+    });
+  });
+
+  panel.querySelectorAll('.btn-f-dismiss-invite').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      sfx.play('click');
+      const target = e.currentTarget as HTMLElement;
+      const from = target.dataset.from;
+      const code = target.dataset.code;
+      if (!from || !code) return;
+      await dismissSessionInvite({ from, code });
+      renderFloatingPanel();
+    });
   });
 
   panel.querySelectorAll('.btn-f-accept-req').forEach((btn) => {

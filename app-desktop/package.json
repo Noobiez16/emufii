@@ -1,6 +1,6 @@
 {
   "name": "emufii",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Play your emulators online with friends, using a six-character code",
   "type": "module",
   "main": "dist/main/index.cjs",

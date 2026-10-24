@@ -16,6 +16,8 @@ import {
   isFloatingPanelOpen,
   getFloatingPanelTab,
   renderFloatingPanel,
+  refreshRelayLatencies,
+  updateHeaderVpsLabel,
 } from './js/components/FloatingPanel.js';
 import { TrayBackdrop } from './js/components/TrayBackdrop.js';
 import { syncFriendsRealtime, encodeAvatarToWebpBase64 } from './js/components/FriendActionModal.js';
@@ -551,6 +553,9 @@ async function checkCoordinatorStatus() {
       chip.title = isOnline
         ? `Coordinator Online${health.present ? ` (${health.present} players online)` : ''}`
         : 'Coordinator Offline';
+    }
+    if (isOnline) {
+      refreshRelayLatencies().catch(() => {});
     }
   } catch {
     if (lamp) {

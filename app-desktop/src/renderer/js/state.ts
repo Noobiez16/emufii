@@ -1,8 +1,18 @@
 import type { RomItem } from '../../main/library/scanner.js';
 import type { RemoteSession, WgTunnelInfo, FriendsReply } from '../../main/network/coordinator.js';
-import type { FriendRequestItem } from '../../main/library/storage.js';
+import type { FriendRequestItem, SessionInviteEntry } from '../../main/library/storage.js';
 
 export type ScreenType = 'splash' | 'library' | 'join' | 'session' | 'friends' | 'finder' | 'settings';
+
+export interface InPanelFriendNotice {
+  type: 'request' | 'accepted' | 'invite' | 'online' | 'playing';
+  name: string;
+  subtitle: string;
+  avatarUrl?: string | null;
+  code?: string;
+  sessionCode?: string;
+  at: number;
+}
 
 export interface AppState {
   currentScreen: ScreenType;
@@ -34,6 +44,7 @@ export interface AppState {
     friendAvatars?: Record<string, string>;
     friendAvatarHashes?: Record<string, string>;
     pendingFriendRequests?: FriendRequestItem[];
+    pendingSessionInvites?: SessionInviteEntry[];
     steamGridDbKey?: string;
     language: 'system' | 'en' | 'es' | 'fr';
     hiddenConsoles: string[];
@@ -45,6 +56,9 @@ export interface AppState {
 
   // Real-time Friend Statuses
   friendStatuses: FriendsReply;
+
+  // In-panel Friend Notification Banner (shown inside Friends floating panel when open)
+  inPanelFriendNotice?: InPanelFriendNotice | null;
 
   // Library
   roms: RomItem[];
@@ -99,6 +113,7 @@ class StateStore {
       friendAvatars: {},
       friendAvatarHashes: {},
       pendingFriendRequests: [],
+      pendingSessionInvites: [],
       steamGridDbKey: '',
       language: 'system',
       hiddenConsoles: [],
@@ -108,6 +123,7 @@ class StateStore {
       autoDownloadUpdates: true,
     },
     friendStatuses: { present: {}, names: {}, avatars: {}, lastGames: {} },
+    inPanelFriendNotice: null,
     roms: [],
     consoleFilter: 'ALL',
     searchQuery: '',

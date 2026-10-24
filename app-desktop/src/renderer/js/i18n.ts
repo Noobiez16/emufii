@@ -33,7 +33,7 @@ const translations: Record<'en' | 'es' | 'fr', Record<string, string>> = {
     appearance: 'Appearance',
     appearance_sub: '{theme} theme · {accent}',
     about: 'About',
-    about_sub: 'Version 2.0.3 • Build 54',
+    about_sub: 'Version 2.0.4 • Build 55',
     crash_logs: 'Crash logs',
     crash_logs_sub: 'What Emufii kept from its last unexpected exits',
 
@@ -166,7 +166,7 @@ const translations: Record<'en' | 'es' | 'fr', Record<string, string>> = {
     appearance: 'Apariencia',
     appearance_sub: 'Tema {theme} · {accent}',
     about: 'Acerca de',
-    about_sub: 'Versión 2.0.3 • Compilación 54',
+    about_sub: 'Versión 2.0.4 • Compilación 55',
     crash_logs: 'Registros de fallos',
     crash_logs_sub: 'Lo que EmuFii guardó de sus salidas inesperadas',
 
@@ -299,7 +299,7 @@ const translations: Record<'en' | 'es' | 'fr', Record<string, string>> = {
     appearance: 'Apparence',
     appearance_sub: 'Thème {theme} · {accent}',
     about: 'À propos',
-    about_sub: 'Version 2.0.3 • Build 54',
+    about_sub: 'Version 2.0.4 • Build 55',
     crash_logs: 'Journaux de crash',
     crash_logs_sub: 'Ce qu\'EmuFii a conservé de ses dernières sorties inattendues',
 

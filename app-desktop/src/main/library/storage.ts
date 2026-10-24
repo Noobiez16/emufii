@@ -12,6 +12,15 @@ export interface FriendRequestItem {
   at: number;
 }
 
+export interface SessionInviteEntry {
+  from: string;
+  name: string;
+  code: string;
+  romTitle: string | null;
+  romTitleId: string | null;
+  at: number;
+}
+
 export interface AppConfig {
   profile: {
     id: string;
@@ -39,6 +48,7 @@ export interface AppConfig {
     friendAvatars?: Record<string, string>;
     friendAvatarHashes?: Record<string, string>;
     pendingFriendRequests?: FriendRequestItem[];
+    pendingSessionInvites?: SessionInviteEntry[];
     steamGridDbKey?: string;
     language: 'system' | 'en' | 'es' | 'fr';
     hiddenConsoles: string[];
@@ -149,6 +159,7 @@ export class Storage {
       friendAvatars: loaded.settings?.friendAvatars || {},
       friendAvatarHashes: loaded.settings?.friendAvatarHashes || {},
       pendingFriendRequests: loaded.settings?.pendingFriendRequests || [],
+      pendingSessionInvites: loaded.settings?.pendingSessionInvites || [],
       steamGridDbKey: loaded.settings?.steamGridDbKey || '',
       language: (loaded.settings?.language as any) || 'system',
       hiddenConsoles: loaded.settings?.hiddenConsoles || [],

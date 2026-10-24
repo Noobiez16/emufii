@@ -20,7 +20,7 @@ export class ClientAuth {
   static readonly HEADER_CLIENT = 'X-Emufii-Client';
 
   private static secret: string = process.env.EMUFII_CLIENT_SECRET || defaultClientToken();
-  static clientVersion: string = '54'; // VersionCode 54 (matches Emufii v2.0.3)
+  static clientVersion: string = '55'; // VersionCode 55 (matches Emufii v2.0.4)
 
   private static clockOffsetMs: number = 0;
   private static readonly CLOCK_TOLERANCE_MS = 5000;

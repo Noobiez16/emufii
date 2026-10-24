@@ -446,7 +446,7 @@ function renderModalTabBody(
           <div class="settings-clean-group" style="padding: 18px; margin-bottom: 0; display: flex; flex-direction: column; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <strong style="color: var(--ink-primary); font-size: 16px;">${t('about_card_title')}</strong>
-              <span class="badge" style="font-size: 10px; font-weight: 800; background: var(--plate-bg);">v2.0.3 (54)</span>
+              <span class="badge" style="font-size: 10px; font-weight: 800; background: var(--plate-bg);">v2.0.4 (55)</span>
             </div>
             <div style="color: var(--ink-secondary); font-size: 12px; line-height: 1.4;">
               ${t('about_card_body')}
@@ -760,8 +760,9 @@ function attachModalTabListeners(
     content.querySelector('#btnModalReportIssue')?.addEventListener('click', () => {
       window.open('https://github.com/emufii/emufii/issues', '_blank');
     });
-    content.querySelector('#btnModalClearLogs')?.addEventListener('click', () => {
+    content.querySelector('#btnModalClearLogs')?.addEventListener('click', async () => {
       sfx.play('confirm');
+      await emuApi?.crashLogs?.clear?.();
       alert('Crash logs cleared.');
     });
   }

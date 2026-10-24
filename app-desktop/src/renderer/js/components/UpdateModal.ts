@@ -25,8 +25,8 @@ function escapeHtml(str: string): string {
 export function openUpdateModal(info: UpdateInfo): Promise<'update' | 'skip'> {
   return new Promise((resolve) => {
     const emuApi = (window as any).emufii;
-    const targetVersion = info.latestVersion || info.currentVersion || '2.0.3';
-    const currentVersion = info.currentVersion || '2.0.3';
+    const targetVersion = info.latestVersion || info.currentVersion || '2.0.4';
+    const currentVersion = info.currentVersion || '2.0.4';
     const isNewer = info.updateAvailable;
 
     const existing = document.getElementById('emufiiUpdateModalOverlay');

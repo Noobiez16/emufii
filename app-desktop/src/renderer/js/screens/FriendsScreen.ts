@@ -54,7 +54,7 @@ export function renderFriendsScreen(container: HTMLElement) {
       <div class="plate dialog-content" style="width: 440px; padding: 28px; display: flex; flex-direction: column; gap: 16px;">
         <h2 style="font-size: 20px; font-weight: 800;">Add a Friend</h2>
         <p style="font-size: 13px; color: var(--ink-secondary);">Enter their 12-character Crockford friend code</p>
-        <input type="text" id="inputFriendCode" class="plate" placeholder="Type code XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="padding: 12px 16px; font-family: var(--font-family); font-size: 16px; font-weight: 700; color: var(--accent-bright); text-align: center; text-transform: uppercase;">
+        <input type="text" id="inputFriendCode" class="plate" placeholder="XXXX-XXXX-XXXX" maxlength="14" autocomplete="off" spellcheck="false" style="padding: 12px 16px; font-family: var(--font-family); font-size: 16px; font-weight: 700; color: var(--accent-bright); text-align: center; text-transform: uppercase;">
         <div id="friendCodeError" style="font-size: 12px; color: var(--compat-broken); display: none;">Invalid friend code format or checksum.</div>
         <div style="display: flex; gap: 12px; margin-top: 8px;">
           <button class="btn-secondary plate-button" id="btnCancelAddFriend" style="flex: 1;">Cancel</button>

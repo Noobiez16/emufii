@@ -381,8 +381,26 @@ export function setupIpc(
   safeHandle('coordinator:sendFriendRequest', (_, targetCode: string, fromCode: string, fromName: string) =>
     coordinator.sendFriendRequest(targetCode, fromCode, fromName)
   );
+  safeHandle('coordinator:fetchFriendInbox', (_, myCode: string) =>
+    coordinator.fetchFriendInbox(myCode)
+  );
+  safeHandle('coordinator:answerFriendRequest', (_, myCode: string, fromCode: string, accept: boolean, myName?: string) =>
+    coordinator.answerFriendRequest(myCode, fromCode, accept, myName || storage.getConfig().profile?.name || 'Joueur')
+  );
+  safeHandle('coordinator:sendSessionInvite', (_, fromCode: string, toCode: string, sessionCode: string, fromName: string) =>
+    coordinator.sendSessionInvite(fromCode, toCode, sessionCode, fromName)
+  );
+  safeHandle('coordinator:dismissSessionInvite', (_, myCode: string, fromCode: string, sessionCode: string) =>
+    coordinator.dismissSessionInvite(myCode, fromCode, sessionCode)
+  );
   safeHandle('coordinator:clearFriendRequestInbox', (_, myCode: string) =>
     coordinator.clearFriendRequestInbox(myCode)
+  );
+  safeHandle('coordinator:pingHost', (_, host: string) =>
+    coordinator.pingHost(host)
+  );
+  safeHandle('coordinator:measureRelays', () =>
+    coordinator.measureRelays()
   );
   safeHandle('coordinator:reportJoinFailure', (_, reason, consoleType, code) =>
     coordinator.reportJoinFailure(reason, consoleType, code)
@@ -390,6 +408,60 @@ export function setupIpc(
   safeHandle('coordinator:reportEvent', (_, params) =>
     coordinator.reportEvent(params)
   );
+
+  // --- Crash Logs ---
+  safeHandle('crashLogs:list', () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'crashes');
+      if (!fs.existsSync(dir)) return [];
+      return fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith('crash_') && f.endsWith('.txt'))
+        .map((f) => {
+          const full = path.join(dir, f);
+          const stat = fs.statSync(full);
+          const content = fs.readFileSync(full, 'utf8');
+          return {
+            name: f,
+            path: full,
+            mtime: stat.mtimeMs,
+            size: stat.size,
+            content,
+          };
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, 10);
+    } catch {
+      return [];
+    }
+  });
+  safeHandle('crashLogs:clear', () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'crashes');
+      if (fs.existsSync(dir)) {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.startsWith('crash_') && f.endsWith('.txt')) {
+            try {
+              fs.unlinkSync(path.join(dir, f));
+            } catch {}
+          }
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  safeHandle('crashLogs:openFolder', async () => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'crashes');
+      fs.mkdirSync(dir, { recursive: true });
+      await shell.openPath(dir);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
   // --- WireGuard ---
   safeHandle('wireguard:up', (_, info, dns) => {
@@ -455,7 +527,7 @@ export function setupIpc(
 
   // --- Application Updates ---
   safeHandle('app:checkForUpdates', async () => {
-    const currentVersion = app.getVersion() || '2.0.3';
+    const currentVersion = app.getVersion() || '2.0.4';
     const repos = ['Noobiez16/emufii', 'jojodogm-ctrl/emufii'];
     let releaseData: any = null;
 

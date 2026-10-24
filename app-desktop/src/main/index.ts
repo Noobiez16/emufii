@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { Storage } from './library/storage.js';
 import { setupIpc } from './ipc.js';
 import { EmulatorDownloader } from './emulators/downloader.js';
@@ -8,6 +9,49 @@ import { EmulatorDownloader } from './emulators/downloader.js';
 let mainWindow: BrowserWindow | null = null;
 let installerWindow: BrowserWindow | null = null;
 const storage = new Storage();
+
+function writeCrashReport(kind: string, err: unknown) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'crashes');
+    fs.mkdirSync(dir, { recursive: true });
+    const now = new Date();
+    const stamp = now.toISOString().replace(/[:.]/g, '-');
+    const file = path.join(dir, `crash_${stamp}.txt`);
+    const stack = err instanceof Error ? err.stack || err.message : String(err);
+    const body = [
+      `Emufii Desktop Crash Report`,
+      `Version: ${app.getVersion() || '2.0.4'} (Build 55)`,
+      `Timestamp: ${now.toISOString()}`,
+      `Platform: ${process.platform} ${process.arch} (${os.release()})`,
+      `Type: ${kind}`,
+      ``,
+      stack,
+    ].join('\n');
+    fs.writeFileSync(file, body, 'utf8');
+
+    // Keep at most 10 recent crash files (matching Android CrashLogger)
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith('crash_') && f.endsWith('.txt'))
+      .map((f) => ({ name: f, full: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const old of files.slice(10)) {
+      try {
+        fs.unlinkSync(old.full);
+      } catch {}
+    }
+  } catch {}
+}
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+  writeCrashReport('uncaughtException', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+  writeCrashReport('unhandledRejection', reason);
+});
 
 function getAppIconPath(): string {
   const ico = path.join(__dirname, '../../build/icon.ico');

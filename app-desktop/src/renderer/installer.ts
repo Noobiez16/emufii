@@ -40,7 +40,7 @@ const I18N = {
     titlebar: 'Instalador de Emufii',
     heroTitle: 'Instalar Emufii',
     heroSub: 'Juega tus emuladores favoritos en línea con amigos mediante un simple código de 6 caracteres.',
-    version: 'v2.0.3 • 64-bit',
+    version: 'v2.0.4 • 64-bit',
     pathTitle: 'Directorio de Instalación',
     spaceStats: 'Requerido: ~280 MB',
     browse: 'Examinar...',
@@ -49,8 +49,8 @@ const I18N = {
     optDesktopSub: 'Inicia tus juegos con un solo clic desde la pantalla principal.',
     optStartMenu: 'Anclar al Menú Inicio',
     optStartMenuSub: 'Registra Emufii en las aplicaciones de tu sistema operativo.',
-    optKeys: 'Auto-aprovisionar Switch Keys y perfiles 60 FPS',
-    optKeysSub: 'Configuración automática de keys, shaders y sincronización de cuadros.',
+    optKeys: 'Auto-configurar perfiles de emuladores a 60 FPS',
+    optKeysSub: 'Configuración automática de gráficos, shaders y sincronización de cuadros.',
     optProtocol: 'Asociar protocolo de enlace web (emufii://)',
     optProtocolSub: 'Permite unirte a salas multijugador con un clic desde el navegador.',
     cancel: 'Cancelar',
@@ -71,7 +71,7 @@ const I18N = {
     titlebar: 'Emufii Setup',
     heroTitle: 'Install Emufii',
     heroSub: 'Play your favorite emulators online with friends using a simple 6-character code.',
-    version: 'v2.0.3 • 64-bit',
+    version: 'v2.0.4 • 64-bit',
     pathTitle: 'Installation Directory',
     spaceStats: 'Required: ~280 MB',
     browse: 'Browse...',
@@ -80,8 +80,8 @@ const I18N = {
     optDesktopSub: 'Launch your sessions quickly from your main desktop.',
     optStartMenu: 'Add to Start Menu',
     optStartMenuSub: 'Registers Emufii into your system applications list.',
-    optKeys: 'Auto-provision Switch Keys & 60 FPS configs',
-    optKeysSub: 'Automatic configuration of decryption keys, shaders & frame pacing.',
+    optKeys: 'Auto-configure 60 FPS emulator profiles',
+    optKeysSub: 'Automatic configuration of graphics backends, shaders & frame pacing.',
     optProtocol: 'Associate web protocol (emufii://)',
     optProtocolSub: 'Join multiplayer rooms with 1-click links directly from the browser.',
     cancel: 'Cancel',
@@ -250,7 +250,7 @@ function renderSetupStage(main: HTMLElement, footer: HTMLElement) {
           </label>
         </div>
 
-        <!-- Switch Keys & 60 FPS -->
+        <!-- 60 FPS Emulator Profiles -->
         <div class="installer-option-row">
           <div class="installer-option-info">
             <svg class="installer-option-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
@@ -434,7 +434,7 @@ function renderCompleteStage(main: HTMLElement, footer: HTMLElement) {
 
   footer.innerHTML = `
     <div class="installer-footer-left">
-      <span>Emufii v2.0.3 Ready</span>
+      <span>Emufii v2.0.4 Ready</span>
     </div>
     <div class="installer-footer-actions">
       <button class="installer-btn-install" id="btnFinish">

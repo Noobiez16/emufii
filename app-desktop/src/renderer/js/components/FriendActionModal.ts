@@ -386,21 +386,83 @@ export function promptRenameFriendModal(params: {
 }
 
 /**
+ * Checks whether the Friends floating panel is currently open.
+ */
+export function isFriendsFloatingPanelOpen(): boolean {
+  const panelEl = document.getElementById('floatingCloudPanel');
+  const friendsBtn = document.getElementById('headerFriendsBtn');
+  return !!(
+    panelEl &&
+    panelEl.classList.contains('open') &&
+    friendsBtn &&
+    friendsBtn.classList.contains('active')
+  );
+}
+
+let inPanelNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
  * Displays a themed top-right Friend Alert or Friend Request toast (matching FriendAlert.kt).
+ * If the Friends floating panel is open, displays the notification inside the panel instead
+ * of spawning an external floating toast.
  */
 export function showFriendToast(params: {
-  type: 'online' | 'playing' | 'request' | 'added';
+  type: 'online' | 'playing' | 'request' | 'added' | 'accepted' | 'invite';
   code: string;
   name: string;
   avatarUrl?: string | null;
   game?: string | null;
+  sessionCode?: string | null;
   onAccept?: () => void;
   onDecline?: () => void;
 }) {
   sfx.play('notify');
 
+  let subtitle = 'is online';
+  if (params.type === 'playing') {
+    subtitle = params.game ? `is playing ${params.game}` : 'is in a game';
+  } else if (params.type === 'request') {
+    subtitle = `sent you a friend request (${formatFriendCode(params.code)})`;
+  } else if (params.type === 'accepted') {
+    subtitle = `accepted your friend request (${formatFriendCode(params.code)})`;
+  } else if (params.type === 'invite') {
+    subtitle = params.game
+      ? `invited you to play ${params.game}`
+      : `invited you to room ${params.sessionCode || ''}`;
+  } else if (params.type === 'added') {
+    subtitle = params.game ? `Added! Playing ${params.game}` : 'Added to your friends list!';
+  }
+
   const existing = document.getElementById('emufiiFriendToast');
   if (existing) existing.remove();
+
+  // Requirement: Only show the external floating notification toast if the Friends floating panel is CLOSED.
+  // When the Friends floating panel is OPEN, render the notification inside the Friends floating panel.
+  if (isFriendsFloatingPanelOpen()) {
+    const noticeAt = Date.now();
+    store.set({
+      inPanelFriendNotice: {
+        type: params.type === 'added' ? 'accepted' : params.type,
+        name: params.name,
+        subtitle,
+        avatarUrl: params.avatarUrl || null,
+        code: params.code,
+        sessionCode: params.sessionCode || undefined,
+        at: noticeAt,
+      },
+    });
+    window.dispatchEvent(new CustomEvent('emufii:friends-panel-refresh'));
+
+    if (inPanelNoticeTimer) clearTimeout(inPanelNoticeTimer);
+    inPanelNoticeTimer = setTimeout(() => {
+      const current = store.get().inPanelFriendNotice;
+      if (current && current.at === noticeAt) {
+        store.set({ inPanelFriendNotice: null });
+        window.dispatchEvent(new CustomEvent('emufii:friends-panel-refresh'));
+      }
+    }, 6500);
+    return;
+  }
 
   const toast = document.createElement('div');
   toast.id = 'emufiiFriendToast';
@@ -426,14 +488,9 @@ export function showFriendToast(params: {
     ? `<img src="${params.avatarUrl}" alt="${escapeHtml(params.name)}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 50%;">`
     : `<span>${escapeHtml((params.name || 'F').slice(0, 2).toUpperCase())}</span>`;
 
-  let subtitle = 'is online';
-  if (params.type === 'playing') {
-    subtitle = params.game ? `is playing ${params.game}` : 'is in a game';
-  } else if (params.type === 'request') {
-    subtitle = `sent you a friend request (${formatFriendCode(params.code)})`;
-  } else if (params.type === 'added') {
-    subtitle = params.game ? `Added! Playing ${params.game}` : 'Added to your friends list!';
-  }
+  const hasActions = params.type === 'request' || params.type === 'invite';
+  const acceptLabel = params.type === 'invite' ? 'Join Room' : 'Accept Request';
+  const declineLabel = params.type === 'invite' ? 'Dismiss' : 'Decline';
 
   toast.innerHTML = `
     <div style="display: flex; align-items: center; gap: 12px;">
@@ -454,14 +511,14 @@ export function showFriendToast(params: {
       <button id="btnDismissFriendToast" style="background: transparent; border: none; color: var(--ink-secondary); cursor: pointer; font-size: 16px; line-height: 1; padding: 4px;">&times;</button>
     </div>
     ${
-      params.type === 'request'
+      hasActions
         ? `
       <div style="display: flex; gap: 8px; margin-top: 2px;">
         <button class="btn-secondary plate-button" id="btnDeclineToastReq" style="flex: 1; height: 30px; font-size: 11px; border-radius: 9999px;">
-          Decline
+          ${declineLabel}
         </button>
         <button class="btn-primary plate-button" id="btnAcceptToastReq" style="flex: 1; height: 30px; font-size: 11px; border-radius: 9999px;">
-          Accept Request
+          ${acceptLabel}
         </button>
       </div>
     `
@@ -471,7 +528,7 @@ export function showFriendToast(params: {
 
   document.body.appendChild(toast);
 
-  const timeoutMs = params.type === 'request' ? 12000 : 4500;
+  const timeoutMs = hasActions ? 12000 : 4500;
   const timer = setTimeout(() => {
     toast.remove();
   }, timeoutMs);
@@ -500,6 +557,7 @@ export function showFriendToast(params: {
 let previousOnlineState: Record<string, { online: boolean; game: string | null }> = {};
 let hasInitializedWatchState = false;
 const declinedRequestCodes = new Set<string>();
+const notifiedInviteKeys = new Set<string>();
 let pollInFlight = false;
 
 export async function syncFriendsRealtime(onUpdated?: () => void): Promise<void> {
@@ -510,27 +568,160 @@ export async function syncFriendsRealtime(onUpdated?: () => void): Promise<void>
   pollInFlight = true;
   try {
     const state = store.get();
-    const friends = state.settings.friends || [];
+    let friends = [...(state.settings.friends || [])];
     const myCode = normalizeFriendCode(state.profile.id || '') || state.profile.id;
     const myInboxId = myCode ? deriveFriendInboxId(myCode) : null;
+
+    const discoveredNames: Record<string, string> = { ...(state.settings.friendNames || {}) };
+    const discoveredAvatars: Record<string, string> = { ...(state.settings.friendAvatars || {}) };
+    const discoveredHashes: Record<string, string> = { ...(state.settings.friendAvatarHashes || {}) };
+    let metadataChanged = false;
+
+    let pendingRequests = [...(state.settings.pendingFriendRequests || [])];
+    let pendingInvites = [...(state.settings.pendingSessionInvites || [])];
+    let requestsChanged = false;
+    let invitesChanged = false;
+
+    // 0. Poll official v2.0.4 /friends/inbox endpoint (requests, accepted, invites)
+    if (myCode && emuApi.coordinator.fetchFriendInbox) {
+      try {
+        const inbox = await emuApi.coordinator.fetchFriendInbox(myCode);
+        if (inbox) {
+          // A. Process mutual accepted friendships (popped by coordinator on read)
+          if (Array.isArray(inbox.accepted)) {
+            for (const acc of inbox.accepted) {
+              const accCode = normalizeFriendCode(acc?.id || '');
+              if (accCode && accCode !== myCode) {
+                if (!friends.includes(accCode)) {
+                  await emuApi.config.addFriend(accCode);
+                  friends.push(accCode);
+                }
+                if (acc.name && acc.name.trim()) {
+                  discoveredNames[accCode] = acc.name.trim();
+                  metadataChanged = true;
+                }
+                let accAvatar = discoveredAvatars[accCode] || null;
+                if (!accAvatar && emuApi.coordinator.fetchAvatar) {
+                  try {
+                    accAvatar = await emuApi.coordinator.fetchAvatar(accCode);
+                    if (accAvatar) {
+                      discoveredAvatars[accCode] = accAvatar;
+                      metadataChanged = true;
+                    }
+                  } catch {}
+                }
+                showFriendToast({
+                  type: 'accepted',
+                  code: accCode,
+                  name: acc.name?.trim() || discoveredNames[accCode] || formatFriendCode(accCode),
+                  avatarUrl: accAvatar,
+                });
+              }
+            }
+          }
+
+          // B. Process incoming friend requests from /friends/inbox
+          if (Array.isArray(inbox.requests)) {
+            for (const req of inbox.requests) {
+              const fromCode = normalizeFriendCode(req?.from || '');
+              const fromName = (req?.name || 'Player').trim();
+              if (
+                fromCode &&
+                fromCode !== myCode &&
+                !friends.includes(fromCode) &&
+                !declinedRequestCodes.has(fromCode) &&
+                !pendingRequests.some((r) => r.code === fromCode)
+              ) {
+                let reqAvatar: string | null = discoveredAvatars[fromCode] || null;
+                if (!reqAvatar && emuApi.coordinator.fetchAvatar) {
+                  try {
+                    reqAvatar = await emuApi.coordinator.fetchAvatar(fromCode);
+                    if (reqAvatar) {
+                      discoveredAvatars[fromCode] = reqAvatar;
+                      metadataChanged = true;
+                    }
+                  } catch {}
+                }
+                if (fromName && fromName !== 'Player') {
+                  discoveredNames[fromCode] = fromName;
+                  metadataChanged = true;
+                }
+                const newReq = {
+                  code: fromCode,
+                  name: fromName,
+                  avatarDataUrl: reqAvatar,
+                  at: req.at || Date.now(),
+                };
+                pendingRequests = [newReq, ...pendingRequests];
+                requestsChanged = true;
+
+                showFriendToast({
+                  type: 'request',
+                  code: fromCode,
+                  name: fromName,
+                  avatarUrl: reqAvatar,
+                  onAccept: () => acceptFriendRequest(fromCode, fromName, reqAvatar),
+                  onDecline: () => declineFriendRequest(fromCode),
+                });
+              }
+            }
+          }
+
+          // C. Process incoming session invites from /friends/inbox
+          if (Array.isArray(inbox.invites)) {
+            const nextInvites = inbox.invites
+              .filter((inv: any) => inv && inv.from && inv.code)
+              .map((inv: any) => {
+                const fromCode = normalizeFriendCode(inv.from) || inv.from;
+                return {
+                  from: fromCode,
+                  name: (inv.name || discoveredNames[fromCode] || formatFriendCode(fromCode)).trim(),
+                  code: String(inv.code).toUpperCase(),
+                  romTitle: inv.rom_title || null,
+                  romTitleId: inv.rom_title_id || null,
+                  at: inv.at || Date.now(),
+                };
+              });
+
+            const prevKeys = pendingInvites.map((i) => `${i.from}:${i.code}`).join(',');
+            const nextKeys = nextInvites.map((i: any) => `${i.from}:${i.code}`).join(',');
+            if (prevKeys !== nextKeys) {
+              pendingInvites = nextInvites;
+              invitesChanged = true;
+            }
+
+            for (const inv of nextInvites) {
+              const invKey = `${inv.from}:${inv.code}`;
+              if (!notifiedInviteKeys.has(invKey)) {
+                notifiedInviteKeys.add(invKey);
+                showFriendToast({
+                  type: 'invite',
+                  code: inv.from,
+                  name: inv.name,
+                  avatarUrl: discoveredAvatars[inv.from] || null,
+                  game: inv.romTitle || inv.code,
+                  sessionCode: inv.code,
+                  onAccept: () => acceptSessionInvite(inv),
+                  onDecline: () => dismissSessionInvite(inv),
+                });
+              }
+            }
+          }
+        }
+      } catch {}
+    }
 
     const queryIds = [...friends];
     if (myInboxId && !queryIds.includes(myInboxId)) {
       queryIds.push(myInboxId);
     }
 
-    if (queryIds.length === 0) {
-      store.set({ friendStatuses: { present: {}, names: {}, avatars: {}, lastGames: {} } });
-      return;
-    }
+    const reply =
+      queryIds.length > 0
+        ? await emuApi.coordinator.friendStatuses(queryIds)
+        : { present: {}, names: {}, avatars: {}, lastGames: {} };
 
-    const reply = await emuApi.coordinator.friendStatuses(queryIds);
     if (!reply) return;
-
-    const discoveredNames: Record<string, string> = { ...(state.settings.friendNames || {}) };
-    const discoveredAvatars: Record<string, string> = { ...(state.settings.friendAvatars || {}) };
-    const discoveredHashes: Record<string, string> = { ...(state.settings.friendAvatarHashes || {}) };
-    let metadataChanged = false;
 
     // 1. Collect device usernames from reply.names and reply.present
     for (const code of friends) {
@@ -562,9 +753,7 @@ export async function syncFriendsRealtime(onUpdated?: () => void): Promise<void>
       }
     }
 
-    // 3. Check incoming Friend Request inbox
-    let pendingRequests = [...(state.settings.pendingFriendRequests || [])];
-    let requestsChanged = false;
+    // 3. Fallback check for legacy Friend Request inbox
     if (myInboxId) {
       const inboxGame = reply.lastGames?.[myInboxId];
       const fromCodeRaw = inboxGame?.titleId || null;
@@ -605,20 +794,32 @@ export async function syncFriendsRealtime(onUpdated?: () => void): Promise<void>
       }
     }
 
-    // 4. Persist any new device usernames / avatars / pending requests
+    // Filter out any pending requests that are already in friends
+    const filteredPendingRequests = pendingRequests.filter((r) => !friends.includes(r.code));
+    if (filteredPendingRequests.length !== pendingRequests.length) {
+      pendingRequests = filteredPendingRequests;
+      requestsChanged = true;
+    }
+
+    // 4. Persist any new device usernames / avatars / pending requests / invites
     if (metadataChanged && emuApi.config?.noteFriendMetadata) {
       await emuApi.config.noteFriendMetadata(discoveredNames, discoveredAvatars, discoveredHashes);
     }
-    if (requestsChanged && emuApi.config?.updateSettings) {
-      await emuApi.config.updateSettings({ pendingFriendRequests: pendingRequests });
+    if ((requestsChanged || invitesChanged) && emuApi.config?.updateSettings) {
+      await emuApi.config.updateSettings({
+        pendingFriendRequests: pendingRequests,
+        pendingSessionInvites: pendingInvites,
+      });
     }
 
     const updatedSettings = {
       ...store.get().settings,
+      friends,
       friendNames: discoveredNames,
       friendAvatars: discoveredAvatars,
       friendAvatarHashes: discoveredHashes,
       pendingFriendRequests: pendingRequests,
+      pendingSessionInvites: pendingInvites,
     };
 
     store.set({
@@ -660,6 +861,10 @@ export async function syncFriendsRealtime(onUpdated?: () => void): Promise<void>
     previousOnlineState = nextOnlineState;
     hasInitializedWatchState = true;
 
+    if (requestsChanged || invitesChanged) {
+      window.dispatchEvent(new CustomEvent('emufii:friends-panel-refresh'));
+    }
+
     onUpdated?.();
   } catch {
     // Ignore transient network errors during poll
@@ -688,11 +893,13 @@ export async function acceptFriendRequest(
   const pending = (state.settings.pendingFriendRequests || []).filter((r) => r.code !== normalized);
   await emuApi.config.updateSettings({ pendingFriendRequests: pending });
 
+  if (state.profile.id && emuApi.coordinator?.answerFriendRequest) {
+    emuApi.coordinator
+      .answerFriendRequest(state.profile.id, normalized, true, state.profile.name || 'Joueur')
+      .catch(() => {});
+  }
   if (state.profile.id && emuApi.coordinator?.clearFriendRequestInbox) {
     emuApi.coordinator.clearFriendRequestInbox(state.profile.id).catch(() => {});
-  }
-  if (state.profile.id && emuApi.coordinator?.sendFriendRequest) {
-    emuApi.coordinator.sendFriendRequest(normalized, state.profile.id, state.profile.name).catch(() => {});
   }
 
   const cfg = await emuApi.config.get();
@@ -709,12 +916,89 @@ export async function declineFriendRequest(code: string): Promise<void> {
   const pending = (state.settings.pendingFriendRequests || []).filter((r) => r.code !== normalized);
   await emuApi.config.updateSettings({ pendingFriendRequests: pending });
 
+  if (state.profile.id && emuApi.coordinator?.answerFriendRequest) {
+    emuApi.coordinator
+      .answerFriendRequest(state.profile.id, normalized, false, state.profile.name || 'Joueur')
+      .catch(() => {});
+  }
   if (state.profile.id && emuApi.coordinator?.clearFriendRequestInbox) {
     emuApi.coordinator.clearFriendRequestInbox(state.profile.id).catch(() => {});
   }
 
   const cfg = await emuApi.config.get();
   store.set({ settings: cfg.settings });
+}
+
+export async function dismissSessionInvite(invite: { from: string; code: string }): Promise<void> {
+  const emuApi = (window as any).emufii;
+  const state = store.get();
+  const myCode = normalizeFriendCode(state.profile.id || '') || state.profile.id;
+  const fromCode = normalizeFriendCode(invite.from) || invite.from;
+
+  const remaining = (state.settings.pendingSessionInvites || []).filter(
+    (i) => !(i.from === fromCode && i.code === invite.code)
+  );
+  await emuApi.config.updateSettings({ pendingSessionInvites: remaining });
+
+  if (myCode && emuApi.coordinator?.dismissSessionInvite) {
+    emuApi.coordinator.dismissSessionInvite(myCode, fromCode, invite.code).catch(() => {});
+  }
+
+  const cfg = await emuApi.config.get();
+  store.set({ settings: cfg.settings });
+  window.dispatchEvent(new CustomEvent('emufii:friends-panel-refresh'));
+}
+
+export async function acceptSessionInvite(invite: {
+  from: string;
+  code: string;
+  romTitle?: string | null;
+  romTitleId?: string | null;
+}): Promise<void> {
+  const emuApi = (window as any).emufii;
+  const state = store.get();
+  await dismissSessionInvite(invite);
+
+  try {
+    const remote = await emuApi.coordinator.getSession(invite.code);
+    const allRoms = store.get().roms || [];
+    const matchedRom = allRoms.find(
+      (r: any) =>
+        (remote.romTitleId && (r.titleId === remote.romTitleId || r.productCode === remote.romTitleId)) ||
+        (remote.romTitle && r.displayName.toLowerCase() === remote.romTitle.toLowerCase())
+    );
+
+    const config = await emuApi.config.get();
+    const wgInfo = await emuApi.coordinator.claimAddress(
+      invite.code,
+      config.wgKeys.publicKey,
+      state.profile.name,
+      state.profile.id
+    );
+
+    const isPs2 = matchedRom?.console === 'PS2';
+    const dns = isPs2 ? '10.67.0.1' : null;
+    const wgRes = await emuApi.wireguard.up(wgInfo, dns);
+
+    store.set({
+      activeSession: {
+        code: invite.code,
+        isHost: false,
+        rom: matchedRom || null,
+        token: null,
+        remote,
+        wireguard: wgInfo,
+        wireguardConfigPath: wgRes?.configPath || null,
+        wireguardNative: wgRes?.isNativeActive !== false,
+        step1Done: true,
+        step2Done: false,
+        netplayBusy: false,
+      },
+    });
+    store.navigate('session');
+  } catch (err: any) {
+    alert('Could not join invited session: ' + (err?.message || 'Session ended'));
+  }
 }
 
 /**
@@ -751,7 +1035,7 @@ export async function addFriendWithSync(
     return { ok: false, error: 'Invalid friend code.' };
   }
 
-  // Send real-time friend request to the added user via coordinator
+  // Send real-time friend request to the added user via coordinator (/friends/request)
   if (myCode && emuApi.coordinator?.sendFriendRequest) {
     emuApi.coordinator.sendFriendRequest(normalized, myCode, state.profile.name || 'Joueur').catch(() => {});
   }

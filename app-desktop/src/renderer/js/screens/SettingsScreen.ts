@@ -770,7 +770,7 @@ function renderAboutPage(state: any): string {
     <div class="settings-clean-group" style="padding: 24px; display: flex; flex-direction: column; gap: 12px;">
       <div style="display: flex; align-items: center; gap: 12px;">
         <strong style="color: var(--ink-primary); font-size: 18px; font-weight: 900;">${t('about_card_title')}</strong>
-        <span style="font-size: 11px; font-weight: 800; background: var(--plate-bg); padding: 3px 10px; border-radius: 9999px; border: 1px solid var(--plate-border); color: var(--accent-bright);">v2.0.3 • Build 54</span>
+        <span style="font-size: 11px; font-weight: 800; background: var(--plate-bg); padding: 3px 10px; border-radius: 9999px; border: 1px solid var(--plate-border); color: var(--accent-bright);">v2.0.4 • Build 55</span>
       </div>
       <div style="color: var(--ink-secondary); font-size: 13.5px; line-height: 1.5;">
         ${t('about_card_body')}
@@ -848,17 +848,21 @@ function renderAboutPage(state: any): string {
 function renderCrashLogsPage(): string {
   return `
     <div class="settings-section-header">${t('crash_logs_title')}</div>
-    <div class="settings-clean-group" style="padding: 24px; display: flex; flex-direction: column; gap: 14px; text-align: center;">
+    <div class="settings-clean-group" id="crashLogsGroup" style="padding: 24px; display: flex; flex-direction: column; gap: 14px; text-align: center;">
       <div style="width: 52px; height: 52px; border-radius: 50%; background: rgba(56, 225, 255, 0.12); color: #38E1FF; display: flex; align-items: center; justify-content: center; margin: 0 auto;">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       </div>
-      <div>
+      <div id="crashLogsStatusArea">
         <strong style="font-size: 15px; color: var(--ink-primary);">${t('crash_logs_empty')}</strong>
         <p style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">${t('crash_logs_desc')}</p>
       </div>
-      <div style="display: flex; gap: 10px; justify-content: center; margin-top: 8px;">
+      <div id="crashLogsListArea" style="display: none; flex-direction: column; gap: 10px; text-align: left; max-height: 320px; overflow-y: auto;"></div>
+      <div style="display: flex; gap: 10px; justify-content: center; margin-top: 8px; flex-wrap: wrap;">
         <button class="btn-primary plate-button" id="btnReportIssue" style="height: 34px; padding: 0 18px; font-size: 12px; border-radius: 9999px;">
           ${t('report_issue')}
+        </button>
+        <button class="btn-secondary plate-button" id="btnOpenCrashFolder" style="height: 34px; padding: 0 18px; font-size: 12px; border-radius: 9999px;">
+          ${t('open_folder')}
         </button>
         <button class="btn-secondary plate-button" id="btnClearCrashLogs" style="height: 34px; padding: 0 18px; font-size: 12px; border-radius: 9999px;">
           ${t('clear_logs')}
@@ -1347,12 +1351,12 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
           }
         } else {
           if (badge) {
-            badge.textContent = `${t('up_to_date_badge')} (v${res?.currentVersion || '2.0.3'})`;
+            badge.textContent = `${t('up_to_date_badge')} (v${res?.currentVersion || '2.0.4'})`;
             badge.style.background = 'rgba(16, 185, 129, 0.15)';
             badge.style.color = '#10b981';
           }
           if (sublabel) {
-            sublabel.textContent = `You are running the latest version (v${res?.currentVersion || '2.0.3'}).`;
+            sublabel.textContent = `You are running the latest version (v${res?.currentVersion || '2.0.4'}).`;
           }
           if (openModalAlways && res) {
             openUpdateModal(res);
@@ -1405,6 +1409,54 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
       }
     });
   } else if (view === 'crashlogs') {
+    const loadCrashLogs = async () => {
+      const statusArea = container.querySelector('#crashLogsStatusArea') as HTMLElement | null;
+      const listArea = container.querySelector('#crashLogsListArea') as HTMLElement | null;
+      if (!emuApi?.crashLogs?.list || !listArea || !statusArea) return;
+      try {
+        const logs = await emuApi.crashLogs.list();
+        if (Array.isArray(logs) && logs.length > 0) {
+          statusArea.innerHTML = `
+            <strong style="font-size: 15px; color: var(--ink-primary);">${logs.length} ${logs.length === 1 ? 'crash log' : 'crash logs'} recorded</strong>
+            <p style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">${t('crash_logs_desc')}</p>
+          `;
+          listArea.style.display = 'flex';
+          listArea.innerHTML = logs
+            .map(
+              (log: any, idx: number) => `
+              <div class="plate" style="padding: 12px 14px; border-radius: 14px; background: var(--plate-bg-low);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <strong style="font-size: 12px; font-family: monospace; color: var(--ink-primary);">${log.name}</strong>
+                  <button class="btn-secondary plate-button btnCopyCrashLog" data-idx="${idx}" style="height: 24px; padding: 0 10px; font-size: 10px; border-radius: 9999px;">Copy</button>
+                </div>
+                <pre style="margin: 0; font-size: 11px; color: var(--ink-secondary); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow-y: auto;">${String(log.content || '').replace(/</g, '&lt;')}</pre>
+              </div>
+            `
+            )
+            .join('');
+          listArea.querySelectorAll('.btnCopyCrashLog').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+              const idx = Number((e.currentTarget as HTMLElement).dataset.idx || 0);
+              const item = logs[idx];
+              if (item?.content) {
+                navigator.clipboard.writeText(item.content);
+                sfx.play('confirm');
+              }
+            });
+          });
+        } else {
+          listArea.style.display = 'none';
+          listArea.innerHTML = '';
+          statusArea.innerHTML = `
+            <strong style="font-size: 15px; color: var(--ink-primary);">${t('crash_logs_empty')}</strong>
+            <p style="font-size: 12px; color: var(--ink-secondary); margin-top: 4px;">${t('crash_logs_desc')}</p>
+          `;
+        }
+      } catch {}
+    };
+
+    loadCrashLogs();
+
     container.querySelector('#btnReportIssue')?.addEventListener('click', () => {
       sfx.play('click');
       const url = 'https://github.com/emufii/emufii/issues';
@@ -1414,10 +1466,16 @@ function attachDetailListeners(view: SettingsHubView, container: HTMLElement, st
         window.open(url, '_blank');
       }
     });
-    container.querySelector('#btnClearCrashLogs')?.addEventListener('click', (e) => {
+    container.querySelector('#btnOpenCrashFolder')?.addEventListener('click', () => {
+      sfx.play('click');
+      emuApi?.crashLogs?.openFolder?.();
+    });
+    container.querySelector('#btnClearCrashLogs')?.addEventListener('click', async (e) => {
       sfx.play('confirm');
       const btn = e.currentTarget as HTMLButtonElement;
       const origText = btn.textContent;
+      await emuApi?.crashLogs?.clear?.();
+      await loadCrashLogs();
       btn.textContent = '✓ Cleared';
       btn.disabled = true;
       setTimeout(() => {
